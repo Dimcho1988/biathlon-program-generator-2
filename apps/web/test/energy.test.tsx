@@ -1,5 +1,7 @@
+// @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
-import React from "react";
+import React, {act} from "react";
+import {createRoot} from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { parseEnergy, type EnergyHistory } from "../lib/energy";
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
@@ -101,4 +103,25 @@ describe("energy review", () => {
     expect(html).not.toMatch(/name="weight_kg"[^>]*required/);
     expect(html).toContain('name="outside_factor"');
   });
+});
+
+
+it("keeps partial substrate trends and saves the outside factor without re-entering body data", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const fetcher = vi.fn().mockResolvedValue({ok: true, json: async () => ({saved: true})});
+  vi.stubGlobal("fetch", fetcher);
+  const div = document.createElement("div"), root = createRoot(div);
+  try {
+    const accounted = {...zero, kcal: 2400, carbohydrate_g: 300, fat_g: 100};
+    await act(async () => root.render(<EnergyDashboard canEdit data={{...data, days: [{...data.days[0], accounted, outside: accounted}]}}/>));
+    const select = [...div.querySelectorAll("select")].find(s => s.querySelector('option[value="fuel_g"]'))!;
+    await act(async () => {select.value="fuel_g"; select.dispatchEvent(new Event("change", {bubbles:true}));});
+    expect(div.querySelector('.energy-daybar')?.getAttribute('aria-label')).toContain("Въглехидрати 300 g · Мазнини 100 g");
+    const form = div.querySelector<HTMLFormElement>(".energy-form")!;
+    form.querySelector<HTMLInputElement>('input[name="outside_factor"]')!.value = "1.4";
+    await act(async () => {form.dispatchEvent(new Event("submit", {bubbles:true, cancelable:true}));});
+    expect(JSON.parse(fetcher.mock.calls[0][1].body)).toMatchObject({outside_factor:1.4, sex:null, weight_kg:null,
+      height_cm:null, birth_year:null, effective_from:"2026-11-14", expected_revision:0});
+    expect(div.textContent).toContain("Настройките са записани.");
+  } finally {await act(async () => root.unmount()); vi.unstubAllGlobals();}
 });

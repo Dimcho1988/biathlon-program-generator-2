@@ -245,3 +245,5 @@
   .energy-cards p { grid-column: 1 / -1; }
   .energy-cards strong { margin: 0; white-space: nowrap; }
 }
+.energy-heading label { min-width: 0; max-width: 100%; }
+.energy-page select { max-width: 100%; }

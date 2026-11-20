@@ -105,14 +105,18 @@ function ProfileForm({ data, day, canEdit }: { data: EnergyHistory; day: EnergyD
 
 export function EnergyDashboard({ data, canEdit }: { data: EnergyHistory; canEdit: boolean }) {
   const [selected, setSelected] = useState(data.days.filter(d => d.day < data.today && dailyValue(d)).at(-1)?.day ?? data.days.at(-1)?.day ?? "");
-  const [view, setView] = useState<"energy" | "g" | "kcal">("energy");
+  const [view, setView] = useState<"energy" | "g" | "kcal" | "fuel_g" | "fuel_kcal">("energy");
   const day = data.days.find(d => d.day === selected) ?? data.days.at(-1);
+  const fuel = view === "fuel_g" || view === "fuel_kcal";
+  const fuelUnit = view === "fuel_g" ? "g" : "kcal";
+  const fuelLabel = (d: EnergyDay) => macros.slice(0, 2).map(([k, label]) => `${label} ${n(dailyValue(d)?.[`${k}_${fuelUnit}`], 1)} ${fuelUnit}`).join(" · ");
   const parts = (d: EnergyDay) => view === "energy"
     ? sources.map(([k]) => d.energy_sources?.[k] ?? (k === "activity_kcal" ? d.activity.kcal : 0))
+    : fuel ? macros.slice(0, 2).map(([k]) => dailyValue(d)?.[`${k}_${fuelUnit}`] ?? 0)
     : macros.map(([k, , , factor]) => (d.targets?.[`${k}_g`] ?? 0) * (view === "kcal" ? factor : 1));
   const quantity = (d: EnergyDay) => parts(d).reduce((a, b) => a + b, 0);
   const max = Math.max(1, ...data.days.map(quantity));
-  const legend = view === "energy" ? sources : macros;
+  const legend = view === "energy" ? sources : fuel ? macros.slice(0, 2) : macros;
   return <>
     <section className="energy-panel">
       <form method="get" className="energy-period">
@@ -123,16 +127,20 @@ export function EnergyDashboard({ data, canEdit }: { data: EnergyHistory; canEdi
       <div className="energy-heading"><h2>Дневна динамика</h2>
         <label>Показател<select value={view} onChange={e => setView(e.target.value as typeof view)}>
           <option value="energy">Енергоразход · kcal</option>
+          <option value="fuel_g">Оценени въглехидрати и мазнини · g</option>
+          <option value="fuel_kcal">Оценени въглехидрати и мазнини · kcal</option>
           <option value="g">Хранителни цели · g</option>
           <option value="kcal">Хранителни цели · kcal</option>
         </select></label>
       </div>
       <p className="energy-caption">{view === "energy"
         ? "Щрихованите колони показват само оценената част. Липсващ разход не означава нула."
+        : fuel ? "Оценени окислени въглехидрати и мазнини за отчетената част от деня. Белтъчините са показани отделно като цел за прием."
         : "Разпределение на хранителните цели. При непълен ден е налична само резервната белтъчна цел."}</p>
       <div className="energy-bars" role="group" aria-label="Избери ден от графиката">
         {data.days.map(d => <button key={d.day} type="button" className={`energy-daybar ${d.total ? "" : "partial"} ${selected === d.day ? "selected" : ""}`}
-          aria-label={`${d.day}: ${view === "energy" ? `${n(dailyValue(d)?.kcal)} kcal, ${dailyLabel(d, data.today)}` : macros.map(([k, label]) => `${label} ${n(d.targets?.[`${k}_g`])} g`).join(", ")}`}
+          aria-label={`${d.day}: ${view === "energy" ? `${n(dailyValue(d)?.kcal)} kcal, ${dailyLabel(d, data.today)}` : fuel ? fuelLabel(d) : macros.map(([k, label]) => `${label} ${n(d.targets?.[`${k}_g`])} g`).join(", ")}`}
+          title={fuel ? `${d.day}: ${fuelLabel(d)}` : undefined}
           aria-pressed={selected === d.day} onClick={() => setSelected(d.day)}>
           <span className="energy-stack" style={{ height: `${Math.max(2, 160 * quantity(d) / max)}px` }}>
             {parts(d).map((v, i) => <i key={i} style={{ background: legend[i][2], flex: v }} />)}
@@ -140,6 +148,7 @@ export function EnergyDashboard({ data, canEdit }: { data: EnergyHistory; canEdi
         </button>)}
       </div>
       <div className="energy-legend">{legend.map(([k, label, color]) => <span key={k}><i style={{ background: color }} />{label}</span>)}</div>
+      {fuel && day && <p className="energy-caption">{day.day}: {fuelLabel(day)} · {dailyLabel(day, data.today)}.</p>}
       <details><summary>Дневни стойности</summary>
         <div className="energy-table energy-daily-table" tabIndex={0} aria-label="Дневни калории и хранителни цели">
           <table><caption>Разход и цели за прием · избери ден за подробности</caption>
