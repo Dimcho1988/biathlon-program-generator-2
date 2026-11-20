@@ -37,12 +37,21 @@ export type EnergyActivity = Partial<Energy> & {
   carbohydrate_fraction_assumption?: number;
   protein_fraction_assumption?: number;
   uncovered_reasons_seconds?: { missing_signal: number; outside_hr_range: number };
+  fallback_reasons_seconds?: { missing_signal: number; outside_hr_range: number };
+  fallback_met?: number;
+  fallback_carbohydrate_fraction?: number;
   coverage_percent: number;
   timeline: (Energy & { start_s: number; seconds: number })[];
   source_seconds?: {
     measured_hr: number;
     relative_intensity: number;
     strength_met?: number;
+    low_intensity?: number;
+    bounded_hr?: number;
+    rest?: number;
+    pause_rest?: number;
+    pace_met?: number;
+    sport_met?: number;
     unknown: number;
   };
 };
