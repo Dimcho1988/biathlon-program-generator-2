@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from vflat_b65 import apply_vflat_b65
-from vflat_b65.terrain_correction import DENSITY_RANGE, terrain_correction
+from vflat_b65.terrain_correction import terrain_correction
 from apps.api.activity_shadow_pipeline import activity_shadow_configuration_fingerprint, compute_activity_shadow
 from intervals_inspector.stream_normalizer import NormalizerInput, normalize_stream_intervals
 
@@ -24,51 +24,29 @@ def detail(**changes):
 
 
 @pytest.mark.parametrize("sport", ["NordicSki", "Walk"])
-def test_approved_20_m_per_km_example_scales_all_samples_without_changing_eligibility(sport):
+@pytest.mark.parametrize("density", [0, 6.17754, 20, 29.3548439988, 29.355, 50])
+def test_session_density_never_rescales_sample_speeds_or_eligibility(sport, density):
     source = frame()
     baseline = apply_vflat_b65(source)
-    corrected = apply_vflat_b65(source, activity_detail=detail(type=sport))
-    expected = 1 / (1 + (0.8834239445414596 * 20 - 7.974288128873758) / 100)
-    np.testing.assert_allclose(corrected.vflat_b65_kmh, baseline.vflat_b65_kmh * expected)
+    corrected = apply_vflat_b65(source, activity_detail=detail(type=sport, distance=1000, total_elevation_gain=density))
+    np.testing.assert_allclose(corrected.vflat_b65_kmh, baseline.vflat_b65_kmh)
     np.testing.assert_array_equal(corrected.valid, baseline.valid)
-    pd.testing.assert_series_equal(corrected.grade_actual_pct, baseline.grade_actual_pct)
-    assert corrected.attrs["terrain_correction"]["applied"]
-    assert corrected.attrs["terrain_correction"]["gain_per_km"] == 20
+    assert corrected.attrs["terrain_correction"]["factor"] == 1
+    assert not corrected.attrs["terrain_correction"]["applied"]
+    assert corrected.attrs["terrain_correction"]["gain_per_km"] == density
 
 
-@pytest.mark.parametrize("metadata,grade,reason", [
-    (detail(), 6.0, "UPHILL_ONLY"),
-    (detail(type="Run"), 0.0, "SPORT_NOT_VALIDATED"),
-    (detail(total_elevation_gain=None), 0.0, "TERRAIN_METADATA_MISSING"),
-    (detail(total_elevation_gain=-1), 0.0, "TERRAIN_METADATA_MISSING"),
-    (detail(distance=0), 0.0, "TERRAIN_METADATA_MISSING"),
-    (detail(distance=float("nan")), 0.0, "TERRAIN_METADATA_MISSING"),
-    (detail(total_elevation_gain=800), 0.0, "OUTSIDE_VALIDATED_RANGE"),
-    (detail(total_elevation_gain=100), 0.0, "OUTSIDE_VALIDATED_RANGE"),
-    (detail(total_elevation_gain=160), 0.0, "BELOW_CORRECTION_THRESHOLD"),
-])
-def test_no_reduction_for_unvalidated_cases(metadata, grade, reason):
-    result = terrain_correction(frame(grade), metadata)
-    assert result["factor"] == 1.0
-    assert not result["applied"]
-    assert result["reason"] == reason
+def test_uphill_correction_still_increases_speed_and_downhill_can_reduce_it():
+    uphill = apply_vflat_b65(frame(6), activity_detail=detail())
+    downhill = apply_vflat_b65(frame(-6), activity_detail=detail())
+    assert uphill.vflat_b65_kmh.mean() > 18
+    assert downhill.vflat_b65_kmh.mean() < 18
 
 
-def test_domain_boundaries_and_empty_samples():
-    for density in DENSITY_RANGE:
-        result = terrain_correction(frame(), detail(distance=1000, total_elevation_gain=density))
-        assert result["reason"] != "OUTSIDE_VALIDATED_RANGE"
-    assert terrain_correction(frame(count=0), detail())["factor"] == 1
-
-
-def test_recording_gap_does_not_join_short_stops_or_add_terrain_time():
-    source = frame(count=7)
-    source["elapsed_s"] = [0, 1, 2, 100, 101, 102, 103]
-    source["speed_raw_mps"] = [0, 0, 0, 0, 0, 5, 5]
-    source["grade_pct"] = [6, 6, 6, 6, 6, 0, 0]
-    result = terrain_correction(source, detail())
-    assert result["uphill_time_share"] == pytest.approx(3 / 5)
-    assert result["applied"]
+@pytest.mark.parametrize("metadata", [detail(total_elevation_gain=None), detail(distance=0), detail(total_elevation_gain=-1)])
+def test_missing_or_invalid_totals_are_diagnostic_only(metadata):
+    result = terrain_correction(frame(count=0), metadata)
+    assert result["factor"] == 1 and result["gain_per_km"] is None
 
 
 def test_metadata_invalidates_cached_result_but_not_model_comparison_key():
@@ -79,7 +57,7 @@ def test_metadata_invalidates_cached_result_but_not_model_comparison_key():
     assert activity_shadow_configuration_fingerprint(**kw, activity_detail=detail(name="different")) == baseline
 
 
-def test_pipeline_corrects_index_speed_and_diagnostics_with_identical_hr_and_valid_time():
+def test_pipeline_keeps_index_speed_hr_and_valid_time_independent_of_session_totals():
     count = 901
     normalized = normalize_stream_intervals(NormalizerInput(offsets=list(range(count)), metrics={
         "heartrate": [150.0] * count, "velocity_smooth": [5.0] * count,
@@ -89,6 +67,7 @@ def test_pipeline_corrects_index_speed_and_diagnostics_with_identical_hr_and_val
     _, baseline = compute_activity_shadow(detail=detail(total_elevation_gain=None), **kwargs)
     _, corrected = compute_activity_shadow(detail=detail(), **kwargs)
     factor = corrected["diagnostics"]["vflat"]["terrain_correction"]["factor"]
+    assert factor == 1.0
     a, b = baseline["trainability_index"], corrected["trainability_index"]
     assert b["comparison_key"] == a["comparison_key"]
     assert corrected["configuration_fingerprint"] != baseline["configuration_fingerprint"]

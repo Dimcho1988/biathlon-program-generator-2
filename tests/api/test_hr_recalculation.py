@@ -10,6 +10,19 @@ from biathlon.hr_zones import bounds_from_hrmax
 from intervals_inspector.stream_normalizer import NormalizerInput, normalize_stream_intervals
 
 
+def test_hr_recalibration_never_relabels_legacy_speed_as_current():
+    from apps.api.hr_recalculation import StoredCalibrationUnavailable
+    normalized=normalize_stream_intervals(NormalizerInput(offsets=list(range(30)),metrics={
+        'heartrate':[150.]*30,'velocity_smooth':[5.]*30,'gradient':[0.]*30}))
+    detail={'type':'NordicSki','start_date':'2026-11-01T08:00:00Z','moving_time':29.}
+    settings=SimpleNamespace(zone_bounds_bpm=(90,130,150,165,175,190),hrmax_bpm=190)
+    immutable,previous=compute_activity_shadow(detail=detail,normalized=normalized,
+        zone_bounds_bpm=settings.zone_bounds_bpm,explicit_hrmax_bpm=190)
+    previous['vflat_model_version']='vflat_b65_dynamic_v5_terrain_density'
+    with pytest.raises(StoredCalibrationUnavailable):
+        recalibrate_shadow(immutable,previous,detail=detail,settings=settings)
+
+
 @pytest.mark.parametrize("sport", ["Run", "VirtualRun", "NordicSki", "RollerSki", "Ride"])
 @pytest.mark.parametrize("recording", ["regular", "smart", "gap", "missing_hr"])
 def test_local_hr_correction_matches_full_model_without_speed_recomputation(monkeypatch, sport, recording):

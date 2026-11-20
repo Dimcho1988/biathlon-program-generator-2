@@ -17,7 +17,7 @@ from fastapi import HTTPException
 from biathlon import recovery_v2, speed_duration, preliminary_capacity, dosing_curve, speed_anchor_policy
 from biathlon.athlete_functional_profile import build_functional_profile
 from biathlon.sport_heart_rate import local_settings, reference_offset, policy as sport_hr_policy, is_cycling
-from .trainability_history import HISTORY_DAYS, history_from_calendar, robust_mean, read_calendar, window_start
+from .trainability_history import usable_admission, HISTORY_DAYS, history_from_calendar, robust_mean, read_calendar, window_start
 from .model_schemas import RecoveryConfigInput, RecoveryHistoryV2, initial_settings
 from .oauth_store import HistoricalGenerationReferenceConflict, PersistentStoreFailure
 from .speed_segments import segment_measurement
@@ -363,7 +363,7 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     compatible=[];incompatible=0
     for activity in recent:
         index=activity.get("index")
-        if not index or index.get("admission",{}).get("status")!="ACCEPTED":continue
+        if not index or not usable_admission(index):continue
         if (not tests_match_index or index.get("hrmax_bpm")!=settings.hrmax_bpm
             or list(index.get("zone_bounds_bpm",[]))!=list(settings.zone_bounds_bpm)
             or index.get("comparison_key")!=comparison_key

@@ -19,6 +19,7 @@ from biathlon.constants import COMPONENTS
 from biathlon.load_progression import observed_window
 from biathlon.individual_learning import dose_changes
 from biathlon.learning_provenance import eligible_load_rows, heuristic_load_dates
+from .trainability_history import usable_admission
 from .response_monitoring import latest_entries, number, relative_score
 from .stress_model import CHANNELS
 from .trainability import MODEL_VERSION, SCHEMA_VERSION
@@ -165,7 +166,7 @@ def _ti_outcomes(trainability, start, returned, end):
     for row in trainability:
         index = row.get("index") or {}
         if (index.get("model_version") != MODEL_VERSION or index.get("schema_version") != SCHEMA_VERSION
-                or index.get("admission", {}).get("status") != "ACCEPTED" or not index.get("comparison_key")):
+                or not usable_admission(index) or not index.get("comparison_key")):
             continue
         day = row.get("local_date", "")
         side = "before" if baseline_start <= day < start.isoformat() else "after" if returned < day <= end.isoformat() else None

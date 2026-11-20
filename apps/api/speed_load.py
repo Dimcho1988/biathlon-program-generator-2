@@ -29,7 +29,7 @@ from vflat_b65.load import VERSION as LOAD_SAMPLES_VERSION
 from .activity_shadow_pipeline import activity_shadow_configuration_fingerprint
 from .speed_segments import sample_intervals
 from .speed_load_cache import speed_load_cache, speed_activity_cache
-from .trainability_history import history_from_calendar, read_calendar, robust_mean
+from .trainability_history import usable_admission, history_from_calendar, read_calendar, robust_mean
 from .trainability import MIN_SECONDS_BY_BAND, MAX_GAP_SECONDS
 from .component_load_context import read_contexts
 
@@ -146,7 +146,7 @@ def prior_indices(history, sport, day, settings):
     first=(day-timedelta(days=40)).isoformat();last=day.isoformat()
     key=activity_shadow_configuration_fingerprint(settings.zone_bounds_bpm,settings.hrmax_bpm,sport=sport)
     previous=[a for a in history if a["sport"]==sport and first<=a["local_date"]<last
-              and a.get("index") and a["index"].get("admission",{}).get("status")=="ACCEPTED"
+              and a.get("index") and usable_admission(a["index"])
               and a["index"].get("comparison_key")==key
               and a["index"].get("source_versions",{}).get("vflat")==speed_model_versions(sport)[0]
               and a["index"].get("hr_reference_offset_bpm",0)==reference_offset(sport)]

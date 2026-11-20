@@ -78,7 +78,7 @@ def test_running_configuration_changes_cache_and_comparison_without_changing_ski
     kwargs=dict(zone_bounds_bpm=(124,144,164,182,190,205),explicit_hrmax_bpm=205)
     legacy=activity_shadow_configuration_fingerprint(**kwargs)
     old=activity_shadow_configuration_fingerprint(**kwargs, hrmod_model_version="hrmod_mirror_area_shift_v9")
-    assert old=="90b536d21b57b9d0b86f9dfc29451b856b3c9b50f53d7c93c31a47b10faebe3b"
+    assert old != "90b536d21b57b9d0b86f9dfc29451b856b3c9b50f53d7c93c31a47b10faebe3b"  # Old speed/TI fingerprint cannot be reused.
     assert legacy != old
     assert activity_shadow_configuration_fingerprint(**kwargs,sport="NordicSki")==legacy
     run=activity_shadow_configuration_fingerprint(**kwargs,sport="Run")
@@ -146,7 +146,7 @@ def test_vflat_v4_calculated_grade_reaches_payload_and_segments():
     assert row["grade_vflat_effective_pct"] == pytest.approx(-0.2)
     assert row["grade_vflat_stationary_pct"] == pytest.approx(-0.2)
     assert derived["segments_15s"][2]["grade_vflat_effective_pct"] < 10.0
-    assert derived["vflat_model_version"] == "vflat_b65_dynamic_v5_terrain_density"
+    assert derived["vflat_model_version"] == "vflat_b65_dynamic_v6_sample_terrain"
 
 
 def test_immutable_input_is_minimal_and_original_normalized_data_is_unchanged() -> None:
@@ -377,3 +377,29 @@ def test_hrmod_v9_invalidates_previous_cache_and_index_comparison(monkeypatch, o
     monkeypatch.setattr(pipeline, 'HRMOD_CONFIG_VERSION', f'hrmod_config_{old_version}')
     assert activity_shadow_configuration_fingerprint(**kwargs, activity_duration_s=900) != current
     assert activity_shadow_configuration_fingerprint(**kwargs) != comparison
+
+
+def test_speed_comparison_weights_identical_supported_intervals_not_hr_samples():
+    from apps.api.shadow_models.vflat_b65 import speed_comparison
+    rows=[{"dt_s":.25,"speed_raw_kmh":10.,"vflat_b65_kmh":20.},
+          {"dt_s":.75,"speed_raw_kmh":30.,"vflat_b65_kmh":40.},
+          {"dt_s":1.,"speed_raw_kmh":None,"vflat_b65_kmh":99.},
+          {"dt_s":1.,"speed_raw_kmh":99.,"vflat_b65_kmh":None},
+          {"dt_s":30.,"speed_raw_kmh":99.,"vflat_b65_kmh":99.},
+          {"dt_s":1.,"speed_raw_kmh":99.,"vflat_b65_kmh":99.,"exclusion_reason":"GAP"}]
+    assert speed_comparison(rows)=={"seconds":1.,"mean_raw_kmh":25.,"mean_vflat_kmh":35.}
+    assert speed_comparison([])=={"seconds":0.,"mean_raw_kmh":None,"mean_vflat_kmh":None}
+
+
+def test_segment_speed_uses_independent_intervals_and_splits_fractional_boundary():
+    from apps.api.activity_shadow_pipeline import _segments_15s
+    hr=[{'elapsed_s':0,'speed_raw_kmh':99,'vflat_b65_kmh':99}]
+    speed=[{'elapsed_s':14.5,'dt_s':1.,'speed_raw_kmh':10.,'vflat_b65_kmh':20.},
+           {'elapsed_s':15.5,'dt_s':1.,'speed_raw_kmh':20.,'vflat_b65_kmh':30.}]
+    result=_segments_15s(hr,speed)
+    assert len(result)==2 and result[1]['sample_count']==0
+    assert result[0]['speed_comparison_seconds']==1.5
+    assert result[0]['speed_raw_kmh']==pytest.approx(40/3)
+    assert result[0]['vflat_b65_kmh']==pytest.approx(70/3)
+    assert result[1]['speed_comparison_seconds']==.5
+    assert result[1]['speed_raw_kmh']==20 and result[1]['vflat_b65_kmh']==30

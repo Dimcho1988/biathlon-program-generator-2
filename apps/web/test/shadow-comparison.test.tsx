@@ -36,6 +36,14 @@ const payload = {
 };
 
 describe("Raw ↔ Shadow comparison", () => {
+  it("uses the common time-weighted speed summary independently of sparse HR rows", () => {
+    const html = renderToStaticMarkup(<ShadowActivityPanel payload={{...payload,
+      speed_comparison: {seconds: 300, mean_raw_kmh: 12.5, mean_vflat_kmh: 16.5}}} activityRef="shadow-0123456789abcdef0123456789abcdef" />);
+    expect(html).toContain("12.5 → 16.5");
+    expect(html).toContain("Еднакви валидни интервали");
+    const legacy = renderToStaticMarkup(<ShadowActivityPanel payload={payload} activityRef="shadow-0123456789abcdef0123456789abcdef" />);
+    expect(legacy).toContain("Нужно е обновяване за съпоставимо усредняване");
+  });
   it("renders a coach-facing parallel comparison without implying canonical effects", () => {
     const html = renderToStaticMarkup(
       <ShadowActivityPanel payload={payload} activityRef="shadow-0123456789abcdef0123456789abcdef" />,

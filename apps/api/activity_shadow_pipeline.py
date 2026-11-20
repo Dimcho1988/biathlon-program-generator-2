@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 from apps.api.shadow_models.hrmod_v4 import SOURCE_COMMIT, run_hrmod_v4_shadow
-from apps.api.shadow_models.vflat_b65 import run_vflat_b65_shadow
+from apps.api.shadow_models.vflat_b65 import run_vflat_b65_shadow, speed_comparison
 from apps.api.trainability import MODEL_VERSION as TRAINABILITY_MODEL_VERSION, compute_trainability
 from vflat_b65.terrain_correction import terrain_metadata
 from vflat_b65.sports import is_running, is_cycling, is_treadmill, is_nordic, speed_model_versions
@@ -313,13 +313,27 @@ def _profile(
     )
 
 
-def _segments_15s(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _segments_15s(rows: list[dict[str, Any]], speed_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     buckets: dict[int, list[dict[str, Any]]] = {}
+    speed_buckets: dict[int, list[dict[str, Any]]] = {}
     for row in rows:
         bucket = int(float(row["elapsed_s"]) // 15.0)
         buckets.setdefault(bucket, []).append(row)
+    for row in speed_rows:
+        end,dt=(_plain_number(row.get(k)) for k in ("elapsed_s","dt_s"))
+        if end is None or dt is None or not 0<dt<=1 or end<dt:
+            continue
+        start=end-dt
+        # Split fractional intervals at exact 15 s boundaries; never let a gap
+        # contribute speed time, or sparse HR timestamps determine the weights.
+        for bucket in range(int(start//15), int(np.ceil(end/15))):
+            overlap=min(end,(bucket+1)*15)-max(start,bucket*15)
+            if overlap>0:
+                speed_buckets.setdefault(bucket,[]).append({**row,"dt_s":overlap})
+                buckets.setdefault(bucket,[])
     result = []
     for bucket, values in sorted(buckets.items()):
+        comparison=speed_comparison(speed_buckets.get(bucket,[]))
         def mean(name: str):
             available = [
                 number
@@ -333,8 +347,9 @@ def _segments_15s(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "start_elapsed_s": bucket * 15.0,
                 "end_elapsed_s": (bucket + 1) * 15.0,
                 "sample_count": len(values),
-                "speed_raw_kmh": mean("speed_raw_kmh"),
-                "vflat_b65_kmh": mean("vflat_b65_kmh"),
+                "speed_raw_kmh": comparison["mean_raw_kmh"],
+                "vflat_b65_kmh": comparison["mean_vflat_kmh"],
+                "speed_comparison_seconds": comparison["seconds"],
                 "hr_raw_bpm": mean("hr_raw_bpm"),
                 "hrmod_final_bpm": mean("hrmod_final_bpm"),
                 "added_bpm": mean("added_bpm"),
@@ -512,6 +527,7 @@ def compute_activity_shadow(
         "terrain_model_version": hrmod.get("terrain_model_version"),
         "timeseries": rows,
         "speed_load_summary": vflat.get("speed_load_summary"),
+        "speed_comparison": vflat.get("speed_comparison"),
         # Independent 1 Hz Vflat samples for maximal tests. Combined rows above
         # retain original HR timestamps and HR exclusions, so cannot supply this.
         "speed_test_series": [{
@@ -525,7 +541,6 @@ def compute_activity_shadow(
                if "load_status" in r else {}),
             **({"grade_assumed_flat": r["grade_assumed_flat"]} if "grade_assumed_flat" in r else {}),
         } for r in vflat["timeseries"]],
-        "segments_15s": _segments_15s(rows),
         "sprint_str_summary": vflat.get("sprint_str_summary", {}),
         "sprint_str_intervals": vflat.get("sprint_str_intervals", []),
         "hrmod_waves": hrmod.get("waves", []),
@@ -545,4 +560,5 @@ def compute_activity_shadow(
             "hrmod_final_result_hash": hrmod.get("final_result_hash"),
         },
     }
+    payload["segments_15s"] = _segments_15s(rows, payload["speed_test_series"])
     return immutable_input, {**payload, "result_hash": _canonical_hash(payload)}

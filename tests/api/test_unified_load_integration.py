@@ -11,7 +11,7 @@ from tests.test_unified_zone_load import BOUNDS, profile, streams
 def test_synthetic_pulse_and_speed_are_not_admitted_to_ti():
     from apps.api.trainability import compute_trainability
     hr = [{"elapsed_s": t, "hr_raw_bpm": 135.} for t in range(650)]
-    speed = [{"elapsed_s": t, "dt_s": 1., "vflat_b65_kmh": 12., "grade_raw_pct": 0.} for t in range(1, 601)]
+    speed = [{"elapsed_s": t, "dt_s": 1., "speed_raw_kmh": 12., "vflat_b65_kmh": 12., "grade_raw_pct": 0.} for t in range(1, 601)]
     kwargs = dict(zone_bounds_bpm=BOUNDS, hrmax_bpm=200, activity_duration_s=650., comparison_key="test", source_versions={})
     measured = compute_trainability(hr, speed, **kwargs)
     assert measured["zones"][0]["valid"]

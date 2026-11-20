@@ -242,7 +242,7 @@
   },
   "index": {
     "schema": "trainability-index-v3",
-    "model": "trainability_paired_raw_lag20_v4_observed_validity",
+    "model": "trainability_paired_raw_lag20_v5_measured_motion",
     "pair": "raw_HR(t+20s) with Vflat(t)",
     "formula": "(100 * paired_time_weighted_HR / HRmax) / paired_time_weighted_Vflat_kmh",
     "direction": "lower_is_more_speed_per_relative_HR_under_comparable_conditions",
@@ -264,7 +264,11 @@
       0.75,
       0.92
     ],
-    "source_status": "ACCEPTED",
+    "source_status": ["ACCEPTED", "PARTIAL"],
+    "outlier_admission": "per_band_20_percent",
+    "measured_speed_required": true,
+    "confirmed_stop_max_kmh": 1,
+    "confirmed_stop_min_span_s": 3,
     "stale_model": "REFRESH_REQUIRED",
     "excluded_from_index_still_in_load": true
   },

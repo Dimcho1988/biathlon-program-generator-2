@@ -8,6 +8,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 from statistics import median
 
+from .trainability_history import usable_admission
 from .response_monitoring import number, relative_score
 
 # Reviewed expert starting values, not a clinically validated scale.
@@ -65,7 +66,7 @@ def freeze_baseline(selected, devices, anchor, trainability=None):
         idx = row.get("index") or {}
         general = idx.get("general") or {}
         value = number(general.get("index"))
-        if row["local_date"] in dates and idx.get("admission", {}).get("status") == "ACCEPTED" and general.get("valid") and value and value > 0:
+        if row["local_date"] in dates and usable_admission(idx) and general.get("valid") and value and value > 0:
             ti_groups[(row["sport"], idx["comparison_key"])][row["local_date"]].append(value)
     ti = []
     for (sport, comparison), observations in ti_groups.items():
@@ -110,7 +111,7 @@ def ti_observation(rows, day, references):
     for current in rows:
         idx = current.get("index") or {}
         general = idx.get("general") or {}
-        if current["local_date"] != day or idx.get("admission", {}).get("status") != "ACCEPTED" or not general.get("valid"):
+        if current["local_date"] != day or not usable_admission(idx) or not general.get("valid"):
             continue
         value = number(general.get("index"))
         if value is None or value <= 0:

@@ -19,8 +19,8 @@ from typing import Any, Mapping
 from .terrain_correction import terrain_correction
 
 
-MODEL_VERSION = "vflat_b65_dynamic_v5_terrain_density"
-CONFIG_VERSION = "vflat_b65_config_v7_uphill_110"
+MODEL_VERSION = "vflat_b65_dynamic_v6_sample_terrain"
+CONFIG_VERSION = "vflat_b65_config_v8_no_density_scaling"
 
 # Authoritative B65 multipliers supplied for the locked model.  Above +5%,
 # these anchors define the approved literature reference curve used by the
@@ -522,7 +522,6 @@ def apply_vflat_b65(
     )
     correction = terrain_correction(out, activity_detail)
     out["vflat_before_terrain_kmh"] = out["vflat_b65_kmh"]
-    out["vflat_b65_kmh"] *= correction["factor"]
     out["vflat_delta_kmh"] = out["vflat_b65_kmh"] - speed_kmh
     out.attrs["terrain_correction"] = correction
     return out

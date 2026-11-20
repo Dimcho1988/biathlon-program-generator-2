@@ -1,5 +1,7 @@
 # Vflat terrain-density correction
 
+Historical: retired on 2026-11-20. See [Vflat/TI motion correction](vflat-ti-motion-staging.md).
+
 Approved for staging on 2026-09-18 after offline comparisons on Valya's
 NordicSki and Walk (roller-ski) activities. The fixed coefficients are
 experimental and have not shown consistent improvement for other athletes.
