@@ -808,6 +808,20 @@ class RecoveryHistoryResponse(StrictModel):
 from .model_schemas import RecoveryHistoryV2
 
 
+class NutritionWeightObservation(StrictModel):
+    day: date
+    weight_kg: float = Field(gt=20, le=250)
+
+
+class NutritionBodyInputs(StrictModel):
+    observed_on: date
+    weight_observations: list[NutritionWeightObservation] = []
+    sex: Literal["MALE", "FEMALE"] | None = None
+    weight_kg: float | None = Field(default=None, gt=20, le=250)
+    height_cm: float | None = Field(default=None, ge=100, le=230)
+    birth_year: int | None = Field(default=None, ge=1900, le=2100)
+
+
 class AthleteSnapshot(StrictModel):
     """Persisted aggregate envelope; no raw streams or provider identifiers."""
 
@@ -816,6 +830,7 @@ class AthleteSnapshot(StrictModel):
     load_history: LoadHistoryResponse
     recovery_history: RecoveryHistoryResponse | RecoveryHistoryV2 | None = None
     wellness_calendar: list[DailyWellnessSummary] = []
+    nutrition_body_inputs: NutritionBodyInputs | None = None
 
 
 class DashboardViewResponse(StrictModel):

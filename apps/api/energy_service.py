@@ -12,10 +12,10 @@ from . import energy_model as model
 
 class NutritionProfile(InputModel):
     effective_from: date
-    sex: Literal["MALE", "FEMALE"]
-    weight_kg: float = Field(gt=20, le=250, allow_inf_nan=False)
+    sex: Literal["MALE", "FEMALE"] | None = None
+    weight_kg: float | None = Field(default=None, gt=20, le=250, allow_inf_nan=False)
     height_cm: float | None = Field(default=None, ge=100, le=230, allow_inf_nan=False)
-    birth_year: int = Field(ge=1900, le=2100)
+    birth_year: int | None = Field(default=None, ge=1900, le=2100)
     resting_kcal: float | None = Field(
         default=None, ge=500, le=4000, allow_inf_nan=False
     )
@@ -54,16 +54,42 @@ def weight_on(entries, wellness, profile, day):
     values = [
         r
         for r in values
-        if r[0] >= profile["effective_from"]
+        if r[0] >= (profile.get("effective_from") or "1900-01-01")
         and (day - date.fromisoformat(r[0])).days <= 30
     ]
-    return max(values)[2] if values else profile["weight_kg"]
+    return max(values)[2] if values else profile.get("weight_kg")
+
+
+def resolved_profile(entries, wellness, imported, day):
+    manual = profile_on(entries, day)
+    base = NutritionProfile(effective_from=day).model_dump(mode="json", exclude={"expected_revision"})
+    # Sex/year of birth and adult height describe the person; current imported
+    # body mass has an observation date and is never projected into the past.
+    base.update({k: imported[k] for k in ("sex", "height_cm", "birth_year") if imported.get(k) is not None})
+    weights = [r for r in imported.get("weight_observations", []) if r["day"] <= str(day)]
+    base["effective_from"] = "1900-01-01"
+    if weights:
+        observation = max(weights, key=lambda r: r["day"])
+        base["weight_kg"] = observation["weight_kg"]
+        base["effective_from"] = observation["day"]
+    elif imported.get("observed_on", "9999") <= str(day) and imported.get("weight_kg"):
+        base["weight_kg"] = imported["weight_kg"]
+        base["effective_from"] = imported["observed_on"]
+    automatic_weight_from = base["effective_from"]
+    if manual:
+        base.update({k: v for k, v in manual["payload"].items() if v is not None})
+        if not manual["payload"].get("weight_kg"):
+            base["effective_from"] = automatic_weight_from
+    base["weight_kg"] = weight_on(entries, wellness, base, day)
+    base["effective_from"] = manual["observed_date"] if manual else str(day)
+    return base
 
 
 def resting(profile, weight, day):
     if profile.get("resting_kcal") is not None:
         return profile["resting_kcal"], "ENTERED_RESTING"
-    if not profile.get("height_cm") or day.year - profile["birth_year"] - 1 < 18:
+    if (not weight or not profile.get("height_cm") or not profile.get("sex")
+            or not profile.get("birth_year") or day.year - profile["birth_year"] - 1 < 18):
         return None, "MISSING_RESTING_INPUTS"
     return (
         10 * weight
@@ -81,8 +107,8 @@ def save_profile(repository, alias, body, actor):
     today = datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone)).date()
     if (
         body.effective_from > today
-        or body.birth_year > body.effective_from.year
-        or today.year - body.birth_year > 100
+        or (body.birth_year is not None and (body.birth_year > body.effective_from.year
+            or today.year - body.birth_year > 100))
     ):
         raise HTTPException(422, "Проверете началната дата и годината на раждане.")
     payload = body.model_dump(mode="json", exclude={"expected_revision"})
@@ -122,19 +148,19 @@ def history(repository, alias, start=None, end=None, now=None):
         raise HTTPException(409, "Липсва обработена история на активностите.")
     snapshot = calendar.get("snapshot_payload") or {}
     wellness = snapshot.get("wellness_calendar") or []
+    imported = snapshot.get("nutrition_body_inputs") or {}
     catalog = calendar["activities"]
     days = {}
     contexts = {}
     inputs = None
     for i in range((end - start).days + 1):
         day = start + timedelta(days=i)
-        entry = profile_on(entries, day)
-        p = entry["payload"] if entry else None
+        p = resolved_profile(entries, wellness, imported, day)
         days[str(day)] = {
             "day": str(day),
             "activities": [],
             "profile": p,
-            "weight_kg": weight_on(entries, wellness, p, day) if p else None,
+            "weight_kg": p["weight_kg"],
         }
     selected = {
         r["latest_shadow_run_key"]: r
@@ -142,7 +168,8 @@ def history(repository, alias, start=None, end=None, now=None):
         if supports_speed_load(r.get("sport"))
         and r.get("latest_shadow_run_key")
         and r.get("local_date") in days
-        and days[r["local_date"]]["profile"]
+        and days[r["local_date"]]["profile"].get("sex")
+        and days[r["local_date"]]["weight_kg"]
     }
     from hashlib import sha256
     import json
@@ -222,7 +249,7 @@ def history(repository, alias, start=None, end=None, now=None):
             d = days[meta["local_date"]]
             p = d["profile"]
             duration = max(meta.get("elapsed_time_s") or 0, meta.get("moving_time_s") or 0)
-            if model.is_strength(meta.get("sport")) and p and duration > 0:
+            if model.is_strength(meta.get("sport")) and d["weight_kg"] and duration > 0:
                 rmr, _ = resting(p, d["weight_kg"], date.fromisoformat(d["day"]))
                 reports[meta["activity_ref"]] = {
                     **model.strength_activity(
@@ -324,7 +351,7 @@ def history(repository, alias, start=None, end=None, now=None):
                 p["outside_factor"],
                 p["outside_cho_fraction"],
             )
-            if rmr and p and duration <= day_seconds and not invalid_time
+            if rmr and d["weight_kg"] and duration <= day_seconds and not invalid_time
             else None
         )
         model.add(total, act)
@@ -342,9 +369,9 @@ def history(repository, alias, start=None, end=None, now=None):
         reasons = []
         if day == today:
             reasons.append("Текущ ден: показана е сумата до момента.")
-        if not p:
-            reasons.append("Липсва личен профил за тази дата.")
-        elif not rmr:
+        if not d["weight_kg"]:
+            reasons.append("Липсва тегло за тази дата.")
+        if not rmr:
             reasons.append("Липсват данни за разхода в покой.")
         if unknown > 1e-6:
             reasons.append(f"Без оценка остават {unknown / 60:.1f} min от активностите.")
@@ -365,16 +392,28 @@ def history(repository, alias, start=None, end=None, now=None):
             status="MODELLED" if ready else "PARTIAL",
             resting_basis=basis,
             reason=" ".join(reasons) or None,
+            outside_factor=p["outside_factor"],
+            energy_sources={
+                "resting_outside_kcal": outside["kcal"] / p["outside_factor"] if outside else None,
+                "movement_outside_kcal": outside["kcal"] * (1 - 1 / p["outside_factor"]) if outside else None,
+                "activity_kcal": act["kcal"] if any(a["kcal"] is not None for a in d["activities"]) or outside else None,
+            },
             targets=model.dietary_targets(
                 total["kcal"] if ready else None,
                 d["weight_kg"],
                 duration / 3600,
-                bool(p and day.year - p["birth_year"] - 1 >= 18),
+                bool(p.get("birth_year") and day.year - p["birth_year"] - 1 >= 18),
+                total["carbohydrate_kcal"] / (total["carbohydrate_kcal"] + total["fat_kcal"])
+                if total["carbohydrate_kcal"] + total["fat_kcal"] > 0 else 0.5,
             ),
         )
     latest = profile_on(entries, end)
+    profile = resolved_profile(entries, wellness, imported, end)
+    missing = [k for k in ("sex", "weight_kg", "birth_year") if not profile.get(k)]
+    if not profile.get("height_cm") and not profile.get("resting_kcal"):
+        missing.append("height_cm")
     return {
-        "menu_guidance": "За хранителен режим първо прочети energy за избрания ден. Разграничавай окислени\nсубстрати от препоръчителен прием; белтъчният прием не е равен на окислените белтъчини.\nИзползвай targets като ориентир за поддържане на теглото, не задавай автоматичен\nдефицит. Ако targets липсват или денят е частичен, обясни липсата и не измисляй\nточен дневен прием. Преди конкретно меню провери посочени алергии, непоносимости\nи хранителни предпочитания; ако не са уточнени, попитай. Дай конкретни храни,\nграмажи, сурово/сготвено тегло, разпределение преди/след тренировка и сбор на\nориентировъчните kcal и макронутриенти за всяко хранене и деня. Провери сумите\nспрямо целта, обозначи хранителните стойности като приблизителни. Това е\nпредложено меню, не отчетен прием или доказан енергиен баланс. Не екстраполирай\nмодела за покой или за непокрити активности. За лица под 18 г. не предписвай\nавтоматични количествени диети; насочи към индивидуален преглед от специалист.\n",
+        "menu_guidance": "За хранителен режим първо прочети energy за избрания ден. Разграничавай окислени\nсубстрати от препоръчителен прием; белтъчният прием не е равен на окислените белтъчини.\nИзползвай targets като ориентир за поддържане на теглото, не задавай автоматичен\nдефицит. При частичен ден използвай само резервната белтъчна цел от targets; не измисляй калории или други макронутриенти за целия ден. Ако targets липсват, не задавай количествена цел. Преди конкретно меню провери посочени алергии, непоносимости\nи хранителни предпочитания; ако не са уточнени, попитай. Дай конкретни храни,\nграмажи, сурово/сготвено тегло, разпределение преди/след тренировка и сбор на\nориентировъчните kcal и макронутриенти за всяко хранене и деня. Провери сумите\nспрямо целта, обозначи хранителните стойности като приблизителни. Това е\nпредложено меню, не отчетен прием или доказан енергиен баланс. Не екстраполирай\nмодела за покой или за непокрити активности. За лица под 18 г. не предписвай\nавтоматични количествени диети; насочи към индивидуален преглед от специалист.\n",
         "schema_version": model.VERSION,
         "calculation_version": model.CALCULATION_VERSION,
         "period_start": str(start),
@@ -384,7 +423,9 @@ def history(repository, alias, start=None, end=None, now=None):
         "evaluated_at": evaluated_at.isoformat(),
         "generation_id": calendar.get("generation_id"),
         "revision": calendar.get("revision"),
-        "profile": latest["payload"] if latest else None,
+        "profile": profile if latest or imported or profile.get("weight_kg") else None,
+        "profile_missing": missing,
+        "profile_source_note": "Наличните лични данни се използват автоматично. Теглото следва датираните измервания от дневника и Intervals.icu; липсващите данни се попълват еднократно.",
         "profile_revision": latest["revision"] if latest else 0,
         "profiles": [
             {
@@ -403,7 +444,8 @@ def history(repository, alias, start=None, end=None, now=None):
             "Белтъчини: 3,28% от енергията при активност и 0,81 mg/kg/min извън нея са групови ориентири, не индивидуални измервания. Прилагането им към кратки/интервални активности е екстраполация.",
             "Извън активности: разходът в покой × оставащото време × избрания фактор. Въглехидратният дял е допускане от профила. Крачките не се добавят втори път.",
             "Грамовете са енергийни еквиваленти (4/9/4 kcal/g), не измерена загуба на тъкани. Хранителният прием се препоръчва отделно.",
-            "Дневният разход предполага, че всички активности са записани. Текущият ден няма завършена дневна цел.",
+            "Дневният разход предполага, че всички активности са записани. Текущият ден има само резервна белтъчна цел, когато има тегло и потвърден пълнолетен профил.",
+            "Хранителни белтъчини: 1,6 g/kg до 40 kcal/kg; линейно до 1,9 g/kg при 80 kcal/kg; над това 1,9 g/kg. При непълен ден — 1,8 g/kg. Това е работно правило на приложението, не валидирана зависимост. Останалите калории следват оцененото съотношение въглехидрати/мазнини.",
         ],
         "references": [
             "https://pubmed.ncbi.nlm.nih.gov/40135445/",

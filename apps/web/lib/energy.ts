@@ -9,10 +9,10 @@ export type Energy = {
 };
 export type NutritionProfile = {
   effective_from: string;
-  sex: "MALE" | "FEMALE";
-  weight_kg: number;
+  sex: "MALE" | "FEMALE" | null;
+  weight_kg: number | null;
   height_cm: number | null;
-  birth_year: number;
+  birth_year: number | null;
   resting_kcal: number | null;
   outside_factor: number;
   outside_cho_fraction: number;
@@ -60,11 +60,20 @@ export type EnergyDay = {
   status: string;
   reason: string | null;
   resting_basis: string;
+  energy_sources?: {
+    resting_outside_kcal: number | null;
+    movement_outside_kcal: number | null;
+    activity_kcal: number | null;
+  };
+  outside_factor?: number;
   targets: {
-    kcal: number;
+    kcal: number | null;
+    protein_g_per_kg: number;
+    energy_kcal_per_kg: number | null;
+    protein_basis: "DAILY_ENERGY_RULE" | "INCOMPLETE_DAY_FALLBACK";
     protein_g: number;
-    carbohydrate_g: number;
-    fat_g: number;
+    carbohydrate_g: number | null;
+    fat_g: number | null;
     allocation_note: string;
   } | null;
 };
@@ -76,6 +85,8 @@ export type EnergyHistory = {
   timezone: string;
   profile: NutritionProfile | null;
   profile_revision: number;
+  profile_missing?: string[];
+  profile_source_note?: string;
   profiles: (NutritionProfile & { revision: number })[];
   days: EnergyDay[];
   assumptions: string[];

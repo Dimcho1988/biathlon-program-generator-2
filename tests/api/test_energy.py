@@ -143,11 +143,11 @@ def test_measured_hr_wins_over_speed_and_hrmod():
 
 def test_dietary_protein_not_oxidation_and_no_incomplete_or_minor_target():
     t = m.dietary_targets(3000, 68, 2, True)
-    assert t["protein_g"] == 122.4
+    assert t["protein_g"] == pytest.approx(110.9)
     assert 4 * (t["carbohydrate_g"] + t["protein_g"]) + 9 * t["fat_g"] == pytest.approx(
         3000
     )
-    assert m.dietary_targets(None, 68, 2, True) is None
+    assert m.dietary_targets(None, 68, 2, True)["protein_g"] == pytest.approx(122.4)
     assert m.dietary_targets(3000, 68, 2, False) is None
 
 
@@ -254,8 +254,9 @@ def test_rest_day_total_and_today_partial():
     rest, current = data["days"]
     assert rest["total"]["kcal"] == 2160
     assert rest["activity"]["kcal"] == 0
-    assert rest["targets"]["protein_g"] == 136
-    assert current["total"] is None and current["targets"] is None
+    assert rest["targets"]["protein_g"] == pytest.approx(108.8)
+    assert current["total"] is None and current["targets"]["kcal"] is None
+    assert current["targets"]["protein_g"] == pytest.approx(122.4)
     assert current["outside"]["kcal"] == pytest.approx(1800 * 1.2 * 13 / 24)
 
 
@@ -300,7 +301,7 @@ def test_strength_assumptions_are_dated_and_do_not_read_sensor_streams():
 
 def test_unknown_activity_keeps_day_partial_with_available_macros():
     d = strength_day(second_activity=True)
-    assert d["total"] is None and d["targets"] is None
+    assert d["total"] is None and d["targets"]["kcal"] is None
     assert d["unknown_activity_seconds"] == 1800
     assert d["accounted"]["kcal"] > 0
     assert all(d["accounted"][k + "_g"] > 0 for k in m.MACROS)
@@ -312,7 +313,8 @@ def test_unknown_activity_keeps_day_partial_with_available_macros():
 def test_no_strength_estimate_for_missing_profile_duration_or_other_sport(sport, duration, entries):
     d = strength_day(sport=sport, duration=duration, entries=entries)
     assert d["activities"][0]["kcal"] is None
-    assert d["total"] is None and d["targets"] is None
+    assert d["total"] is None
+    assert d["targets"] is None if entries == [] else d["targets"]["kcal"] is None
 
 
 def test_dst_day_uses_actual_elapsed_seconds():
@@ -424,3 +426,82 @@ def test_activity_cache_reuses_recording_but_recalculates_dated_body_mass(monkey
     assert third["activity"]["kcal"] / first["activity"]["kcal"] == pytest.approx(
         70 / 68
     )
+
+
+@pytest.mark.parametrize("energy,coefficient", [(20, 1.6), (40, 1.6), (50, 1.675), (60, 1.75), (80, 1.9), (100, 1.9)])
+def test_protein_energy_rule_boundaries_conservation_and_no_training_switch(energy, coefficient):
+    for hours in (0, 0.2, 1, 5):
+        t = m.dietary_targets(energy * 67, 67, hours, True, 0.4)
+        assert t["protein_g"] == pytest.approx(67 * coefficient)
+        assert t["protein_g_per_kg"] == pytest.approx(coefficient)
+        assert t["energy_kcal_per_kg"] == energy
+        assert t["carbohydrate_g"] * 4 + t["fat_g"] * 9 + t["protein_g"] * 4 == pytest.approx(energy * 67)
+        assert t["carbohydrate_g"] * 4 / (t["fat_g"] * 9) == pytest.approx(2/3)
+
+
+def test_partial_targets_only_protein_and_missing_weight_or_minor_stay_absent():
+    for total in (None, 0, float("nan")):
+        t = m.dietary_targets(total, 67, 0, True)
+        assert t["protein_g"] == pytest.approx(120.6)
+        assert t["protein_basis"] == "INCOMPLETE_DAY_FALLBACK"
+        assert all(t[k] is None for k in ("kcal", "carbohydrate_g", "fat_g", "energy_kcal_per_kg"))
+    assert m.dietary_targets(None, None, 0, True) is None
+    assert m.dietary_targets(None, 67, 0, False) is None
+
+
+def test_reuses_imported_body_and_dated_weight_without_nutrition_entry():
+    repo = RestRepository()
+    repo.entries = [{"kind": "WEIGHT", "observed_date": "2026-11-17", "payload": {"morning_kg": 67}}]
+    calendar = repo.active_activity_calendar("a", None, None)
+    calendar["snapshot_payload"]["nutrition_body_inputs"] = {
+        "observed_on": "2026-11-19", "sex": "FEMALE", "height_cm": 170, "birth_year": 1990, "weight_kg": 70}
+    calendar["snapshot_payload"]["wellness_calendar"] = [
+        {"date": "2026-11-18", "metrics": {"weight": {"value": 66}}},
+        {"date": "2026-11-20", "metrics": {"weight": {"value": 65}}}]
+    repo.active_activity_calendar = lambda *args: calendar
+    data = s.history(repo, "a", date(2026,11,17), date(2026,11,18), now=datetime(2026,11,19,12,tzinfo=timezone.utc))
+    assert [d["weight_kg"] for d in data["days"]] == [67, 66]
+    assert data["profile_missing"] == []
+    assert data["profile"]["height_cm"] == 170
+    assert data["profile_revision"] == 0
+    for day in data["days"]:
+        assert day["total"] is not None
+        assert sum(day["energy_sources"].values()) == pytest.approx(day["total"]["kcal"])
+    repo.entries = []
+    calendar["snapshot_payload"]["wellness_calendar"] = []
+    data = s.history(repo, "a", date(2026,11,18), date(2026,11,19), now=datetime(2026,11,19,12,tzinfo=timezone.utc))
+    assert data["days"][0]["weight_kg"] is None  # today's provider mass is not backdated
+    assert data["days"][1]["weight_kg"] == 70
+
+
+def test_outside_factor_change_does_not_require_duplicate_demographics():
+    body = s.NutritionProfile(effective_from="2026-11-18", outside_factor=1.4)
+    assert body.sex is None and body.weight_kg is None
+    imported = {"observed_on": "2026-11-17", "sex": "FEMALE", "birth_year": 1990, "weight_kg": 67, "height_cm": 170}
+    entries = [{"kind": "NUTRITION", "observed_date": "2026-11-18", "payload": body.model_dump(mode="json")}]
+    p = s.resolved_profile(entries, [], imported, date(2026,11,18))
+    assert (p["weight_kg"], p["height_cm"], p["outside_factor"]) == (67, 170, 1.4)
+    assert s.resolved_profile(entries, [], imported, date(2026,11,17))["outside_factor"] == 1.2
+
+
+def test_provider_profile_is_allowlisted_and_invalid_values_stay_missing():
+    from apps.api.nutrition_inputs import provider_body_inputs
+    raw = {"sex": "F", "icu_weight": 67, "weight": 70, "height": 170,
+           "icu_date_of_birth": "1990-04-05", "email": "private", "icu_api_key": "secret", "id": "private"}
+    assert provider_body_inputs(raw, date(2026,11,19)) == {
+        "observed_on": "2026-11-19", "sex": "FEMALE", "weight_kg": 67.0, "height_cm": 170.0, "birth_year": 1990,
+        "weight_observations": [{"day": "2026-11-19", "weight_kg": 67.0}]}
+    assert provider_body_inputs({"sex": "?", "icu_weight": float("nan"), "height": 1.7,
+                                 "icu_date_of_birth": "bad"}, date(2026,11,19)) is None
+    assert provider_body_inputs(None, date(2026,11,19)) is None
+
+
+def test_provider_weight_history_survives_refresh_and_never_backdates_changes():
+    from apps.api.nutrition_inputs import provider_body_inputs
+    first = provider_body_inputs({"icu_weight": 67}, date(2026,11,17))
+    same = provider_body_inputs({"icu_weight": 67}, date(2026,11,18), first)
+    changed = provider_body_inputs({"icu_weight": 66}, date(2026,11,19), same)
+    assert len(same["weight_observations"]) == 1
+    assert s.resolved_profile([], [], changed, date(2026,11,16))["weight_kg"] is None
+    assert s.resolved_profile([], [], changed, date(2026,11,18))["weight_kg"] == 67
+    assert s.resolved_profile([], [], changed, date(2026,11,19))["weight_kg"] == 66

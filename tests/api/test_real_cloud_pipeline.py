@@ -672,3 +672,20 @@ def test_another_athlete_can_refresh_with_explicit_individual_settings():
     )
     assert result.processed_activities == 1
     assert result.snapshot.athlete_id == "ath-another-profile"
+
+
+def test_refresh_reuses_profile_request_for_minimal_nutrition_inputs():
+    class BodyClient(Client):
+        profile_calls = 0
+        def get_athlete_result(self):
+            self.profile_calls += 1
+            return IntervalsResponse(200, {"id": "must-not-survive", "sex": "F", "height": 170,
+                "icu_weight": 67, "icu_date_of_birth": "1990-04-05", "email": "private@example.test"})
+    repo, client = InMemorySnapshotRepository(), BodyClient()
+    refresh(repo, environ=ENV, client=client, period_end=date(2026,8,15), now=datetime(2026,8,15,12,tzinfo=timezone.utc))
+    body = repo.latest("pilot")["nutrition_body_inputs"]
+    assert body["weight_kg"] == 67 and body["birth_year"] == 1990
+    assert body["observed_on"] == "2026-08-15"
+    assert client.profile_calls == 1
+    assert "private@example.test" not in str(repo.latest("pilot"))
+    assert "1990-04-05" not in str(repo.latest("pilot"))
