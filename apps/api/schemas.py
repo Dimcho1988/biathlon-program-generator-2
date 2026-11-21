@@ -547,6 +547,7 @@ class ActivityHrZoneTimes(StrictModel):
 
 
 class ActivityDetailResponse(ActivityCalendarItem):
+    device_laps_status: str | None = None
     hr_zone_times: list[ActivityHrZoneTimes] = Field(default_factory=list)
     hr_zone_time_method: str | None = None
     schema_version: Literal["activity-detail-v1"]
@@ -560,6 +561,8 @@ class ActivityDetailResponse(ActivityCalendarItem):
 
 
 class ActivitySeriesPoint(StrictModel):
+    hrmod_bpm: float | None = None
+    vflat_kmh: float | None = None
     timestamp: str | None
     elapsed_s: float | None
     hr_bpm: float | None

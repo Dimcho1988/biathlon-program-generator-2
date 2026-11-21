@@ -1271,6 +1271,13 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             compute_activity_shadow,
         )
         catalog_metadata: dict[str, dict[str, Any]] = {}
+        from .device_laps import load_device_laps
+        original_file_reader = getattr(provider, "get_activity_file_result", None)
+        previous_laps = {
+            str(row["activity_ref"]): row.get("intervals") or []
+            for row in (repository.activity_calendar(context.public_alias, start, end)
+                        if previous and callable(original_file_reader) else ())
+        }
         catalog_sport_classifications: dict[str, dict[str, Any]] = {}
         catalog_provider_keys: dict[str, str] = {}
         shadow_runs: dict[str, str] = {}
@@ -1300,6 +1307,10 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             catalog_metadata[activity_ref] = extract_activity_metadata(
                 activity_ref, detail
             )
+            if callable(original_file_reader):
+                bundle = load_device_laps(provider, detail, previous_laps.get(activity_ref, ()))
+                catalog_metadata[activity_ref]["intervals"].append(bundle)
+                previous_laps[activity_ref] = [bundle]
             if isinstance(detail.get("onflows_sport_rule"), Mapping):
                 catalog_sport_classifications[activity_ref] = dict(detail["onflows_sport_rule"])
             if refresh_speed_evidence is not None:

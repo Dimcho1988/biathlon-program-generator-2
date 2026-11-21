@@ -88,6 +88,7 @@ export interface ActivityCalendar {
 }
 
 export interface ActivityDetail extends ActivityCalendarItem {
+  device_laps_status?: string | null;
   hr_zone_times?: Array<{zone: ActivityZone; raw_time_s: number; hrmod_time_s: number}>;
   hr_zone_time_method?: string | null;
   schema_version: "activity-detail-v1";
@@ -101,6 +102,8 @@ export interface ActivityDetail extends ActivityCalendarItem {
 }
 
 export interface ActivitySeriesPoint {
+  hrmod_bpm?: number | null;
+  vflat_kmh?: number | null;
   timestamp: string | null;
   elapsed_s: number | null;
   hr_bpm: number | null;

@@ -16,11 +16,13 @@ type Props = {
   description?: string; initialIndex?: number; onSelect?: (index: number) => void;
   selectedIndex?: number; controls?: boolean;
   xLabel?: string;
+  xDomain?: [number, number];
+  bands?: Array<{start: number; end: number; label: string}>;
 };
 const numeric = (value: number) => value.toLocaleString("bg-BG", { maximumFractionDigits: 2 });
 const date = (value: number) => new Date(value).toLocaleDateString("bg-BG", { day: "2-digit", month: "2-digit", timeZone: "UTC" });
 
-export function MetricChart({ title, series, xKind = "date", unit, yKind = "number", domain, reference, maxGap, zero = false, description, initialIndex, onSelect, selectedIndex, controls = true, xLabel }: Props) {
+export function MetricChart({ title, series, xKind = "date", unit, yKind = "number", domain, reference, maxGap, zero = false, description, initialIndex, onSelect, selectedIndex, controls = true, xLabel, xDomain, bands = [] }: Props) {
   const id = useId();
   const [hidden, setHidden] = useState<string[]>([]);
   const [position, setPosition] = useState(initialIndex ?? -1);
@@ -33,7 +35,7 @@ export function MetricChart({ title, series, xKind = "date", unit, yKind = "numb
   const left = Math.max(50, ...ticks.map(value => format(value).length * 7 + 13));
   const layout = useChartLayout(left);
   const { ref, width, height, right, top, bottom, plotWidth, plotHeight, compact } = layout;
-  const start = dates[0]?.x ?? 0, end = dates.at(-1)?.x ?? 1;
+  const start = xDomain?.[0] ?? dates[0]?.x ?? 0, end = xDomain?.[1] ?? dates.at(-1)?.x ?? 1;
   const barSeries = active.filter(item => item.kind === "bar");
   const barWidth = Math.min(26, plotWidth / Math.max(dates.length, 1) * .72 / Math.max(barSeries.length, 1));
   const inset = barSeries.length ? barWidth * barSeries.length / 2 + 2 : 0;
@@ -64,6 +66,10 @@ export function MetricChart({ title, series, xKind = "date", unit, yKind = "numb
       <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={title} aria-describedby={`${id}-description`} onPointerDown={move} onPointerMove={event => { if (event.buttons || (!onSelect && event.pointerType !== "touch")) move(event); }}>
         <title>{title}</title><desc id={`${id}-description`}>{description ?? `${unit}. Избери точка или използвай плъзгача под графиката за точните стойности. Прекъсванията означават липсващи измервания.`}</desc>
         <text className="metric-axis-unit" x={left} y="17">{unit}</text>
+        {bands.filter(band => band.end > start && band.start < end).map((band, i) => <g key={`${band.start}-${i}`}>
+          <rect x={x(Math.max(start, band.start))} y={top} width={Math.max(0, x(Math.min(end, band.end))-x(Math.max(start, band.start)))} height={plotHeight} fill="currentColor" opacity={i % 2 ? .025 : .065}><title>{band.label}</title></rect>
+          <line x1={x(Math.max(start, band.start))} x2={x(Math.max(start, band.start))} y1={top} y2={bottom} strokeDasharray="3 4" />
+        </g>)}
         {ticks.map(tick => <g key={tick}><line className="chart-grid" x1={left} x2={right} y1={y(tick)} y2={y(tick)} /><text className="chart-label" x={left - 9} y={y(tick) + 4} textAnchor="end">{format(tick)}</text></g>)}
         {reference && reference.value >= bounds[0] && reference.value <= bounds[1] && <line className="chart-reference" x1={left} x2={right} y1={y(reference.value)} y2={y(reference.value)}><title>{reference.label}</title></line>}
         {xTicks.map((tick, i) => <g key={tick.x}><line className="metric-tick" x1={x(tick.x)} x2={x(tick.x)} y1={bottom} y2={bottom + 5} /><text className="chart-label" x={x(tick.x)} y={bottom + 22} textAnchor={i === 0 ? "start" : i === xTicks.length - 1 ? "end" : "middle"}>{xFormat(tick.x)}</text></g>)}

@@ -102,16 +102,20 @@ def _local_start(detail: Mapping[str, Any]) -> tuple[str | None, str | None, str
 
 
 def _intervals(detail: Mapping[str, Any]) -> list[dict[str, Any]]:
-    source = detail.get("intervals")
+    source = detail.get("icu_intervals", detail.get("intervals"))
     if not isinstance(source, Sequence) or isinstance(source, (str, bytes, bytearray)):
         return []
     result: list[dict[str, Any]] = []
-    for item in source[:200]:
+    for item in source:
         if not isinstance(item, Mapping):
             continue
         result.append(
             {
                 "name": _text(item.get("name") or item.get("label"), 120),
+                "source": "intervals",
+                "intensity": _text(item.get("type"), 32),
+                "start_time_s": _number(item.get("start_time")),
+                "end_time_s": _number(item.get("end_time")),
                 "start_index": item.get("start_index") if isinstance(item.get("start_index"), int) else None,
                 "end_index": item.get("end_index") if isinstance(item.get("end_index"), int) else None,
                 "elapsed_time_s": _seconds(item, "elapsed_time"),
@@ -119,6 +123,8 @@ def _intervals(detail: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "distance_m": _number(item.get("distance")),
                 "average_hr_bpm": _number(item.get("average_heartrate")),
                 "max_hr_bpm": _number(item.get("max_heartrate")),
+                "average_speed_kmh": (_number(item.get("average_speed")) * 3.6
+                                      if _number(item.get("average_speed")) is not None else None),
             }
         )
     return result
@@ -365,7 +371,9 @@ def activity_detail_payload(
     row: Mapping[str, Any],
     hrmod_zone_summary: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    from .device_laps import catalog_laps
     base = calendar_item(row, hrmod_zone_summary)
+    laps, lap_status = catalog_laps(row)
     return {
         **base,
         "schema_version": "activity-detail-v1",
@@ -373,7 +381,8 @@ def activity_detail_payload(
         "moving_time_min": float(row["moving_time_s"]) / 60.0 if row.get("moving_time_s") is not None else None,
         "elapsed_time_min": float(row["elapsed_time_s"]) / 60.0 if row.get("elapsed_time_s") is not None else None,
         "recording_time_min": float(row["recording_time_s"]) / 60.0 if row.get("recording_time_s") is not None else None,
-        "intervals": row.get("intervals") if isinstance(row.get("intervals"), list) else [],
+        "intervals": laps,
+        "device_laps_status": lap_status,
         "previous_activity_ref": row.get("previous_activity_ref"),
         "next_activity_ref": row.get("next_activity_ref"),
     }

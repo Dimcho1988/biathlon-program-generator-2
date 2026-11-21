@@ -12,7 +12,7 @@ class ProviderReplay:
 
     def __getattr__(self, name):
         method = getattr(self.client, name)
-        if name not in {"get_activities_result", "get_activity_result", "get_streams_result"}:
+        if name not in {"get_activities_result", "get_activity_result", "get_streams_result", "get_activity_file_result"}:
             return method
         def read(*args, **kwargs):
             key = sha256(pickle.dumps((name, args, sorted(kwargs.items())))).hexdigest()

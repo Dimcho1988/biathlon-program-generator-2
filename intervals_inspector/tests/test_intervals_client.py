@@ -75,6 +75,25 @@ def _client(
     return client, session
 
 
+def test_original_file_download_preserves_binary_and_uses_original_endpoint():
+    response = _response()
+    response.content = b"\x1f\x8b\x08original-fit-bytes"
+    client, session = _client([response])
+    result = client.get_activity_file_result("i123")
+    assert result.payload == response.content
+    assert session.get.call_args.args[0] == "https://intervals.icu/api/v1/activity/i123/file"
+    assert session.get.call_args.kwargs["headers"]["Accept"] == "application/octet-stream"
+    response.json.assert_not_called()
+
+
+def test_original_file_download_uses_existing_transient_retry_policy():
+    response = _response()
+    response.content = b"FIT"
+    client, session = _client([_response(status=503), response])
+    assert client.get_activity_file_result("i123").payload == b"FIT"
+    assert session.get.call_count == 2
+
+
 @pytest.mark.parametrize(
     ("method_name", "expected_path"),
     [
