@@ -1,0 +1,20 @@
+import {beforeEach,expect,it,vi} from "vitest";
+import {GET} from "../app/api/athlete/models/speed-history/route";
+import {currentAuthorizedAthlete} from "../lib/account-access";
+import {getSpeedExposure} from "../lib/api";
+vi.mock("../lib/account-access",()=>({currentAuthorizedAthlete:vi.fn()}));
+vi.mock("../lib/api",()=>({getSpeedExposure:vi.fn()}));
+beforeEach(()=>vi.resetAllMocks());
+it("requires an authorized athlete and never accepts an alias from the URL",async()=>{
+  vi.mocked(currentAuthorizedAthlete).mockResolvedValue(null);
+  expect((await GET(new Request("https://onflows.test/api/athlete/models/speed-history?sport=Run"))).status).toBe(401);
+  const access={userId:"user",actorUserId:"coach",canViewRecovery:false,athleteAlias:"selected-athlete",displayName:"Athlete",isOwner:false,canEditPlan:true};
+  vi.mocked(currentAuthorizedAthlete).mockResolvedValue(access);
+  expect((await GET(new Request("https://onflows.test/api/athlete/models/speed-history?sport=Run"))).status).toBe(403);
+  vi.mocked(currentAuthorizedAthlete).mockResolvedValue({...access,canViewRecovery:true});
+  vi.mocked(getSpeedExposure).mockResolvedValue({status:"AVAILABLE",zones:[]});
+  const response=await GET(new Request("https://onflows.test/api/athlete/models/speed-history?sport=TrailRun&athlete_alias=someone-else"));
+  expect(response.status).toBe(200);
+  expect(response.headers.get("Cache-Control")).toContain("no-store");
+  expect(getSpeedExposure).toHaveBeenCalledWith("selected-athlete","TrailRun");
+});

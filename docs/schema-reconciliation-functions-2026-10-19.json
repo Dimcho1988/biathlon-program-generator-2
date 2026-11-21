@@ -1,0 +1,168 @@
+{
+  "format": "onflows-function-format-reconciliation-v1",
+  "functions": [
+    {
+      "signature": "public.activate_onflows_analysis_generation(uuid,uuid,uuid)",
+      "before_sha256": "b4c30df9930d0407253cf9e1e831ea79eaa570937695e43504cc3ef6c9b69d5c",
+      "target_sha256": "670c9f879e0a55e20ce8b7c01f435300f728737457d3dacf2daf6417df02d655",
+      "change": "CRLF_to_LF",
+      "token_sha256": "7a98fe3894e99aa13b542d5ac6fdc3f2d25dad543a930f9583487c498df592d2",
+      "multiline_quoted_tokens": 0,
+      "crlf_pairs": 101
+    },
+    {
+      "signature": "public.active_onflows_activity(text,text)",
+      "before_sha256": "26a1bcf3a96399c333fb0c72270a2337e3d6c84f989181846914a0f6fabcfd66",
+      "target_sha256": "65ff8f6b304c523a4f531c92536168cfe5801ef0e57294bf54aa35a6435b225d",
+      "change": "CRLF_to_LF",
+      "token_sha256": "0389d5b240407ba5400876174f7fa0fe0f0d12f1a34e8063dbf19e7e6b3bfa0d",
+      "multiline_quoted_tokens": 0,
+      "crlf_pairs": 116
+    },
+    {
+      "signature": "public.active_onflows_activity_shadow_index(text)",
+      "before_sha256": "3e579c085af406510842265c4fd416e9fe6d737c8a46d1cca5ecb3fc39bdbb5b",
+      "target_sha256": "63b7857a66d386e2bb89f238d128faff417d8d905381ec087f902e55c9deef04",
+      "change": "CRLF_to_LF",
+      "token_sha256": "5c121c285b1806f759e8855e268aa164a159db0248e70d4dee5536098d1d505a",
+      "multiline_quoted_tokens": 0,
+      "crlf_pairs": 39
+    },
+    {
+      "signature": "public.active_onflows_activity_view(text,text)",
+      "before_sha256": "ff2f50dc3d565c335af625d55176976417f865a046bc5ea5955823b11cb1d263",
+      "target_sha256": "d9a6a49097e5e369975618a8462284c065d4154ee6b19ead2f2722530fea39ad",
+      "change": "CRLF_to_LF",
+      "token_sha256": "14d234b005615124450fc34de4b3fd58d1128c688d93d5a33b2a3ccf341e2dac",
+      "multiline_quoted_tokens": 0,
+      "crlf_pairs": 16
+    },
+    {
+      "signature": "public.active_onflows_analysis(text)",
+      "before_sha256": "3703e56bd41eead8b7055790cd567580d8be1add4231a0a515dc09a52b8954a0",
+      "target_sha256": "aef211323b5ebeca83bcd4f6276718579c26e32b831c1d4ddea40f9b6a6fc1df",
+      "change": "CRLF_to_LF",
+      "token_sha256": "8210e27562d65ce02a5bd1e26ad86998596638fdbc8064a43e1dbab70916deb8",
+      "multiline_quoted_tokens": 0,
+      "crlf_pairs": 25
+    },
+    {
+      "signature": "public.claim_onflows_sync_job(text,integer)",
+      "before_sha256": "906cc54258eede2bd595526b38db9d408d9686afe7ebcf2d28ac773d8ecc9268",
+      "target_sha256": "e07748a4f1ec23f88b2f4654a6cb4e8190465218809ea7bf149764e5586c450c",
+      "change": "CRLF_to_LF",
+      "token_sha256": "1853c7169d3f1c65d0e9b7f0ba71afb5a6350797b833125db45a255c26759a24",
+      "multiline_quoted_tokens": 0,
+      "crlf_pairs": 120
+    },
+    {
+      "signature": "public.consume_onflows_login_ticket(text)",
+      "before_sha256": "96ade1c849052f71d242227e1ebb0d5a5359eda500be7532e662475309438f5e",
+      "target_sha256": "1963244cbf1ea2897ed1e88ef41fe2f179add1f7f3390082b80188df6f5ebdd1",
+      "change": "CRLF_to_LF",
+      "token_sha256": "3b5c89f5ffc7b411f9c39bcaf5f657b9528887e55e6a8f9cce5239c639bf7a59",
+      "multiline_quoted_tokens": 0,
+      "crlf_pairs": 10
+    },
+    {
+      "signature": "public.consume_onflows_oauth_state(text)",
+      "before_sha256": "ea34b33d9854071f60618d4756bc9bf24cd20630b9775dc8d4e7687b4f0627d3",
+      "target_sha256": "d2c8188756cd75da1b97bb42d6ba8c874b47088612d43c44cc78ab0a5ac3d9aa",
+      "change": "CRLF_to_LF",
+      "token_sha256": "ae26d18233f74b7cc2b6044206cf11846fa78ce72af7c909051e8f14e29488fe",
+      "multiline_quoted_tokens": 0,
+      "crlf_pairs": 11
+    },
+    {
+      "signature": "public.enqueue_onflows_sync_job(text,text,text,jsonb)",
+      "before_sha256": "fd01ad22f02fdc8ea3ba609b26bc8091efdd25acd51ba8f0005559cd1bd3bbd3",
+      "target_sha256": "2c4d20688d4df371af8438afa4cd86260160e7c710afe86c50489211af6ec8dc",
+      "change": "whitespace_wrapping_and_CRLF",
+      "token_sha256": "9313a9929d62687095f36fa735c3ce9eb7b4035ba95a7824db203efb9937b807",
+      "multiline_quoted_tokens": 0,
+      "crlf_pairs": 88
+    },
+    {
+      "signature": "public.fail_onflows_sync_job(uuid,uuid,uuid,text,boolean,integer)",
+      "before_sha256": "75c52f5cdf290fe18807e2c69b9675a4661b24ec40e8c6dc087bab654011db6f",
+      "target_sha256": "20ce95e969c695084cd2f5565ccb2d2c88b22f48457f3aba759c1aa7e59ca9b8",
+      "change": "CRLF_to_LF",
+      "token_sha256": "c89cd8fd6d4c3bad396b78d1caba6e441498371aab13a29cf34fb14eb3435a25",
+      "multiline_quoted_tokens": 0,
+      "crlf_pairs": 74
+    },
+    {
+      "signature": "public.onflows_sync_state(text)",
+      "before_sha256": "772e1b58862056e588c691418a0a0f962f2b98bc2086ae48533568029d335dba",
+      "target_sha256": "340329a9fbac7a17c31f24c0489e70b2aaaef98829810db962caab70a4415889",
+      "change": "CRLF_to_LF",
+      "token_sha256": "09ece5987ebbaa6de9ab9adec5b002708a5cba99e97aa9b12562b70cee5442d9",
+      "multiline_quoted_tokens": 0,
+      "crlf_pairs": 48
+    },
+    {
+      "signature": "public.publish_onflows_activity_shadow(text,text,text,text,text,jsonb,text,text,text,text,text,text,text,text,jsonb)",
+      "before_sha256": "f2e74169be296e01ea159194cb0fd4966c4c12c6c48d996c16b287bbf8d26484",
+      "target_sha256": "7a504d250af2dad608ed70c6a4f8f070fdcc2d5ddf365903cef694fd87a257a1",
+      "change": "CRLF_to_LF",
+      "token_sha256": "3ea71a09316a846b8b082d08e3ecd7f7779b0043508b76876304eb4cca575610",
+      "multiline_quoted_tokens": 0,
+      "crlf_pairs": 21
+    },
+    {
+      "signature": "public.publish_onflows_canonical_activity_result(text,text,text,text,text,text,text,jsonb)",
+      "before_sha256": "8392d87683df679b81e05bcf5cd0781514c15e3d7813b8e76357a9952cbb9758",
+      "target_sha256": "81b166ea3e2f7cb1d312254f59712d7ad9f8c54f0d1d6ba76058db4921522abe",
+      "change": "CRLF_to_LF",
+      "token_sha256": "71a27544d4f603ec055f5ef182ecc4047314a61a6233d68092a1cf34f4d9c741",
+      "multiline_quoted_tokens": 0,
+      "crlf_pairs": 14
+    },
+    {
+      "signature": "public.renew_onflows_sync_lease(uuid,uuid,uuid,integer)",
+      "before_sha256": "9336dcb576efe24d9b8c1d2b83e2a01d3b4164526c35359431a045a0496fa534",
+      "target_sha256": "a947d910eb3de4e6e52d2144d30f40928595623a3a387d6a1c89bf9d6c94690a",
+      "change": "CRLF_to_LF",
+      "token_sha256": "dfab682d9c3ca081bdabc03afed8cacfc0790b0f03c2e9a3d885944c665d258c",
+      "multiline_quoted_tokens": 0,
+      "crlf_pairs": 18
+    },
+    {
+      "signature": "public.resolve_onflows_activity_ref(text,text)",
+      "before_sha256": "fa75c6e9b90fa291d686fdd21319cbb5412a8937261ec920e73e25cda78b0751",
+      "target_sha256": "5a4bc72775c6bd1a80bfd953efd610b1dd39b802d0c30fe8d3ece6f16f8b12a7",
+      "change": "CRLF_to_LF",
+      "token_sha256": "67aa4794d411a0de0bed64b51f161b7d59dee06ce026f096424892dd2e01b9d7",
+      "multiline_quoted_tokens": 0,
+      "crlf_pairs": 14
+    },
+    {
+      "signature": "public.rollback_onflows_analysis_generation(text,uuid)",
+      "before_sha256": "e32c06d4a4e29de62a41ee2830461d88ca7b453db591f05d22e335f5bbdbdb84",
+      "target_sha256": "1b3653dfe8003e6ad0dd3f6831d764e15e373e0ec89a8f68081c65528070ec2f",
+      "change": "CRLF_to_LF",
+      "token_sha256": "b1cf4c2cd8f6cbd2144c87eb44b9d88c639baf5bf718f813a833ebf3a5fb8ff8",
+      "multiline_quoted_tokens": 0,
+      "crlf_pairs": 65
+    },
+    {
+      "signature": "public.stage_onflows_analysis_generation(uuid,uuid,uuid,jsonb,text,date,date,date,jsonb,jsonb,boolean)",
+      "before_sha256": "3b214bcbdf48a90b455b9f3db6f64e534682cea3e80e236aee59ce8d0c3c03da",
+      "target_sha256": "4c9adce24905373b0a2465b0342f811bc332b20a1da53a78dfb862cd50e3f669",
+      "change": "CRLF_to_LF",
+      "token_sha256": "5d3f6133004b36c237ab385bf45a832aae907f3d5ad904affe855f6f84be4d3f",
+      "multiline_quoted_tokens": 0,
+      "crlf_pairs": 185
+    },
+    {
+      "signature": "public.store_onflows_canonical_activity_result(text,text,text,text,text,text,text,jsonb)",
+      "before_sha256": "7ab63f11a2843ca7ced8a4c451f4b87df1820084f5927fdf57d28e5adcab4886",
+      "target_sha256": "92b0641eb5c6f5a3bc91874b85d9eedc4632ec71a4166b74b99bb75e06ba9748",
+      "change": "CRLF_to_LF",
+      "token_sha256": "47da54511466ad019166ecb70b58fbae847899c400ecadba69ee6ad60c2fbcfe",
+      "multiline_quoted_tokens": 0,
+      "crlf_pairs": 10
+    }
+  ],
+  "acceptance": "strict raw catalog equality; diagnostic normalization is not acceptance"
+}
