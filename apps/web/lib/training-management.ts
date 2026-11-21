@@ -186,6 +186,7 @@ export interface ComponentLoadBudget {
   effective_limit_basis?: string; index_limit_binding?: boolean;
 }
 export interface ComponentAllocation {
+  objective_active?: boolean; activity_status?: "ACTIVE" | "DISABLED" | "CONFLICT";
   support_reserve_q?: number;
   coverage_percent?: number | null; coverage_status?: "WITHIN_RANGE" | "BELOW_RANGE" | "ABOVE_RANGE" | "NOT_REQUIRED" | "UNKNOWN";
   within_tolerance?: boolean; lower_acceptable?: number; upper_acceptable?: number;
@@ -199,7 +200,18 @@ export interface ComponentAllocation {
 export interface AllocationSegment {
   window_start: string; window_end: string; days: number; components: Partial<Record<Component, ComponentAllocation>>;
 }
+export interface DevelopmentSegment {
+  window_start: string; window_end: string; kind: string; required: boolean;
+  minimum: number; target: number; requested: number;
+  planned: number; actual: number; total: number; unknown_actual: number;
+  unverified_building_labels: number; assessed: boolean;
+  minimum_shortfall: number; target_shortfall: number;
+  status: "TARGET_MET" | "MINIMUM_NOT_MET" | "TARGET_NOT_MET" | "MAINTENANCE_ONLY" | "NOT_ASSESSED_PARTIAL_CYCLE";
+  observed_constraints: string[]; hard_limit_proven: boolean;
+}
 export interface AllocationReport {
+  development?: { version: string; scope: string; segments: DevelopmentSegment[];
+    minimum_shortfall: number; target_shortfall: number; needs_search: boolean; changes_load_limits: boolean };
   acceptance?: { target_percent: number; lower_percent: number; upper_percent: number; within_tolerance: boolean };
   scope?: "WHOLE_MICROCYCLES"; visible_start?: string; visible_end?: string; lookahead_end?: string;
   lookahead_sessions?: number; lookahead_minutes?: number;

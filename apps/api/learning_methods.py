@@ -7,6 +7,7 @@ These associations never establish that a method caused a fitness improvement.
 from __future__ import annotations
 
 from collections import defaultdict
+from copy import deepcopy
 from datetime import date, timedelta
 from hashlib import sha256
 import json
@@ -176,6 +177,10 @@ def confirmed_descriptor(repository, alias, report, activity):
         frozen = matches[0]["execution_descriptor"]
         descriptor.update(purpose=frozen["resolved_role"], resolved_role=frozen["resolved_role"],
                           post_target_maintenance=frozen.get("post_target_maintenance", False))
+        if isinstance(frozen.get("developmental"), dict):
+            # Carry the server-verified dose classification through execution;
+            # a resolved BUILDING label alone cannot establish actual credit.
+            descriptor["developmental"] = deepcopy(frozen["developmental"])
     # Preserve the frame of this recorded execution when later calibrations
     # rebuild the activity's accounting profile. No plan/activity link is inferred.
     evidence = intensity_provenance(activity)

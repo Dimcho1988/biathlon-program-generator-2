@@ -266,6 +266,40 @@ def test_confirmed_execution_preserves_resolved_role_only_for_one_matching_dose(
         assert result["version"] == method_descriptor(method, "Run")["version"]
 
 
+@pytest.mark.parametrize("counts", [True, False])
+@pytest.mark.parametrize("mismatch", [None, "duration", "ambiguous", "recipe", "unconfirmed"])
+def test_developmental_dose_survives_only_unique_confirmed_prescription(monkeypatch, counts, mismatch):
+    from apps.api import learning_methods as service
+    from apps.api.training_sessions import RecordedSession, with_confirmed_methods
+    from biathlon import planning_development
+
+    method = METHODS[A]
+    dose = {"counts": counts, "basis": "WORK_EXCEEDS_METHOD_MAINTENANCE" if counts else "WORK_WITHIN_MAINTENANCE_DOSE",
+            "components": [{"zone": method["zone"], "work_minutes": 20. if counts else 10., "maintenance_work_minutes": 15.}]}
+    frozen = {**method_descriptor(method, "Run"), "purpose": "BUILDING", "resolved_role": "BUILDING", "developmental": dose}
+    approved = [{"method_id": A, "sport": "Run", "total_minutes": 30., "execution_descriptor": frozen}]
+    if mismatch == "duration": approved[0]["total_minutes"] = 45.
+    if mismatch == "recipe": frozen["version"] = "obsolete-recipe"
+    if mismatch == "ambiguous": approved *= 2
+    monkeypatch.setattr(service, "_methods", lambda *a, **kw: [method])
+    monkeypatch.setattr(service, "planned_execution_methods", lambda *a, **kw: approved)
+    report = SessionReport(activity_ref=f"act_{1:032x}", executed_method_id=A, method_confirmed=mismatch != "unconfirmed",
+                           duration_minutes=30., planned_duration_minutes=30.)
+    activity = {"activity_ref": report.activity_ref, "sport": "Run", "local_date": "2026-09-26"}
+    result = service.confirmed_descriptor(Repository(), "ath-test", report, activity)
+    if mismatch:
+        assert result is None or "developmental" not in result
+        return
+    assert result["developmental"] == dose
+    assert result["developmental"] is not dose
+    result["developmental"]["components"][0]["work_minutes"] = 21.
+    assert dose["components"][0]["work_minutes"] == (20. if counts else 10.)
+    actual = with_confirmed_methods([RecordedSession("2026-09-26", (activity,))], [{
+        "id": report.activity_ref, "success": True, "planned_minutes": 30., "actual_minutes": 30., "method": result}])[0]
+    evidence = planning_development.recorded_evidence(actual)
+    assert evidence["known"] and evidence["counts"] is counts
+
+
 @pytest.fixture
 def library_feedback(monkeypatch):
     from apps.api import management_store, model_service
