@@ -125,7 +125,9 @@ def inputs(repo=None, body=None, limited=False):
 
 
 def test_outlook_reuses_daily_component_goals_without_compounding_or_mutation():
-    result, rows, ref, phases, body, repo = inputs()
+    # Compare all six active legacy targets; disabled-strength alignment has
+    # separate weekly/outlook coverage in test_planning_consistency.
+    result, rows, ref, phases, body, repo = inputs(body=profile(strength_enabled=True))
     original_rows = deepcopy(rows)
     for week in result["weeks"]:
         left = engine.date.fromisoformat(week["start_date"])

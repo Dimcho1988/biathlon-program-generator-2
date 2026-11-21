@@ -9,7 +9,7 @@ from datetime import timedelta
 
 from .constants import COMPONENTS
 
-VERSION = "component-allocation-v7-explicit-support-reserve"
+VERSION = "component-allocation-v8-active-objectives"
 SEGMENT_VERSION = VERSION
 COVERAGE_TOLERANCE = .10
 
@@ -24,6 +24,10 @@ def assess_component(row):
     lower, upper = target*(1-COVERAGE_TOLERANCE), target*(1+COVERAGE_TOLERANCE)
     if actual is None or planned is None:
         percent, status = None, "UNKNOWN"
+    elif row.get("objective_active") is False:
+        # Observed work stays in the report even after the activity is disabled.
+        # It is neither a new prescription nor an excess over an active goal.
+        percent, status = None, "NOT_REQUIRED"
     else:
         total = actual+planned-row.get("support_reserve_q", 0.)
         percent = 100*total/target if target > 0 else None
@@ -38,8 +42,9 @@ def assess_component(row):
 def objective_rows(allocation):
     """Use local cycles when present; aggregates cannot hide a local gap."""
     segments = allocation.get("segments") or []
-    return [(z, row) for s in segments for z, row in s["components"].items()] if segments else list(
+    rows = [(z, row) for s in segments for z, row in s["components"].items()] if segments else list(
         allocation.get("components", {}).items())
+    return [(z, row) for z, row in rows if row.get("objective_active") is not False]
 
 
 def acceptance(allocation):
@@ -54,6 +59,8 @@ def gap_score(rows):
     """Larger is better: worst local gap, all range gaps, distance to 100%."""
     errors, outside = [], []
     for _, row in rows:
+        if row.get("objective_active") is False:
+            continue
         actual, planned, target = row.get("actual", 0.), row.get("planned", 0.), row["target"]
         if actual is None or planned is None:
             error = 1.
@@ -83,6 +90,8 @@ def prescription_headroom(row, *, maintenance_reserve=0.):
     """
     if row.get("actual") is None or row.get("planned") is None:
         return None
+    if row.get("objective_active") is False:
+        return 0.
     limit = row["target"]*(1+COVERAGE_TOLERANCE if row.get("basis") == "DIRECT_Q" else 1.)
     if row.get("basis") == "DIRECT_Q" and maintenance_reserve > 0:
         limit = max(limit, row["target"]+maintenance_reserve)
@@ -126,6 +135,12 @@ def objectives(windows, actual, forecast, source, days):
             support_reserve_q=min(planned_q, support_q) if q_known else 0.,
             target_effective=target_e, actual_effective=done_e, planned_effective=max(0., total_e-done_e),
             unallocated_effective=max(0., target_e-total_e))
+        activity = [g[z].get("activity") for g in windows.values()]
+        if any(activity):
+            inactive = all(a and a["status"] == "DISABLED" for a in activity)
+            components[z].update(objective_active=not inactive,
+                                 activity_status="DISABLED" if inactive else "CONFLICT" if any(
+                                     a and a["status"] == "CONFLICT" for a in activity) else "ACTIVE")
         components[z].update(assess_component(components[z]))
         components[z].update(prescription_remaining=prescription_headroom(components[z]),
                              effective_is_prescription_limit=not q_known)

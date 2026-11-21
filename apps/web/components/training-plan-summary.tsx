@@ -3,7 +3,7 @@ import { TimeAvailability, TimeLimitNotice } from "./planning-time-limit";
 import { isRecord } from "../lib/training-status";
 import { durationHms } from "../lib/duration-format";
 import { componentColor, componentLabel } from "../lib/training-visuals";
-import { daySessions, rejectedMethodIds, COMPONENTS, type PlanningDraft, type VolumeHistory } from "../lib/training-management";
+import { daySessions, rejectedMethodIds, COMPONENTS, type DevelopmentSegment, type PlanningDraft, type VolumeHistory } from "../lib/training-management";
 import { HistoryVolume } from "./planning-controls-editor";
 import { PlanningEvidenceNotice, planningHistoryEstimated } from "./planning-evidence-notice";
 import { PlanQComparison } from "./plan-q-comparison";
@@ -18,6 +18,29 @@ const remainder = (row: Record<string, unknown>) => "remaining" in row ? row.rem
 const duration = (value: unknown) => typeof value === "number" ? durationHms(value) : "—";
 const dateLabel = (value: unknown) => typeof value === "string" ? new Date(`${value}T12:00:00Z`).toLocaleDateString("bg-BG", { timeZone: "UTC" }) : "—";
 
+function DevelopmentCoverage({ segments }: { segments: DevelopmentSegment[] }) {
+  if (!segments.length) return null;
+  const constraintLabels: Record<string, string> = {
+    DAILY_INTENSITY_BUDGET: "дневен бюджет за интензивна работа",
+    DIRECT_Q_PROGRESSION_BUDGET: "оставащ приравнен обем по компоненти",
+    COMPONENT_BUDGET_EXHAUSTED: "изчерпан бюджет по компоненти",
+    INSUFFICIENT_TIME_BUDGET: "недостатъчно свободно време",
+    WEEKLY_TIME_LIMIT_EXHAUSTED: "седмично ограничение за време",
+  };
+  return <div className="management-table-wrap"><table>
+    <caption>Изграждащи занимания по микроцикли</caption>
+    <thead><tr><th>Микроцикъл</th><th>Изпълнено + планирано</th><th>Изискване</th><th>Оценка</th></tr></thead>
+    <tbody>{segments.map(segment => <tr key={`${segment.window_start}-${segment.window_end}`}>
+      <th>{dateLabel(segment.window_start)} – {dateLabel(segment.window_end)}</th>
+      <td>{segment.actual} + {segment.planned} = {segment.total}{segment.unknown_actual > 0 && <small>С неизвестна роля: {segment.unknown_actual} изпълнени занимания. Не са отчетени като изграждащи.</small>}{segment.unverified_building_labels > 0 && <small>За {segment.unverified_building_labels} планирани занимания изграждащата доза не е потвърдена.</small>}</td>
+      <td>{segment.required ? <>Минимум {segment.minimum}; цел {segment.target}</> : "Поддържаща работа"}</td>
+      <td>{segment.status === "MINIMUM_NOT_MET" ? "Минимумът не е достигнат при текущото разпределение." : segment.status === "TARGET_NOT_MET" ? "Минимумът е покрит; желаният брой още не е достигнат." : segment.status === "NOT_ASSESSED_PARTIAL_CYCLE" ? "Частичен или смесен микроцикъл — броят не е оценен окончателно." : segment.status === "MAINTENANCE_ONLY" ? "Няма изискване за изграждащи занимания." : "Желаният брой е покрит."}
+        {segment.observed_constraints.some(code => constraintLabels[code]) && <small>Сред отчетените ограничения: {segment.observed_constraints.filter(code => constraintLabels[code]).slice(0, 3).map(code => constraintLabels[code]).join("; ")}.</small>}
+        {(segment.minimum_shortfall > 0 || segment.target_shortfall > 0) && <small>Прегледайте ограниченията по дни. Недостигът не доказва, че друго допустимо разпределение е невъзможно.</small>}</td>
+    </tr>)}</tbody>
+  </table></div>;
+}
+
 function AllocationCoverage({ components, caption, estimatedHistory, segment = false, whole = false }: {
   components: unknown; caption: string; estimatedHistory: boolean; segment?: boolean; whole?: boolean;
 }) {
@@ -27,11 +50,12 @@ function AllocationCoverage({ components, caption, estimatedHistory, segment = f
     <caption>{caption} · ч:мм:сс</caption>
     <thead><tr><th>Компонент / величина</th><th>Желана цел</th><th>{whole ? "Цел за микроцикъла" : segment ? "Цел за отрязъка" : "Съгласувана цел"}</th><th>{estimatedHistory ? "Изпълнено · с оценен товар" : "Изпълнено"}</th><th>{whole ? "План и прогнозно продължение" : "Планирано"}</th><th>Неразпределено до целта</th><th>Прогнозно покритие</th>{segment && <th>Оставащ товар с разлив</th>}</tr></thead>
     <tbody>{rows.map(row => {
+      const inactive = row.objective_active === false;
       const target = row.target ?? row.target_effective;
       const actual = "actual" in row ? row.actual : row.actual_effective;
       const planned = row.planned ?? row.planned_effective;
-      const percent = typeof target === "number" && target > 0 && typeof actual === "number" && typeof planned === "number" ? 100 * (actual + planned - (typeof row.support_reserve_q === "number" ? row.support_reserve_q : 0)) / target : null;
-      return <tr key={row.zone}><th><span className="management-zone-legend"><i style={{ background: componentColor(row.zone) }} aria-hidden="true"/>{componentLabel(row.zone)}</span><small>{row.basis === "DIRECT_Q" ? "Приравнен обем" : "Товар с разлив"}</small>{(row.actual_exceeds_target === true || row.actual_effective_exceeds_target === true) && <small>Изпълненото е над целта</small>}</th><td>{duration(row.desired_target_q ?? target)}</td><td>{duration(target)}</td><td>{duration(actual)}</td><td>{duration(planned)}{typeof row.support_reserve_q === "number" && row.support_reserve_q > 0 && <small>Вкл. поддържащ резерв: {duration(row.support_reserve_q)}</small>}</td><td>{duration(remainder(row))}</td><td>{percent === null ? "—" : `${percent.toFixed(1)}%`}{typeof row.within_tolerance === "boolean" && <small>{row.coverage_status === "BELOW_RANGE" ? "Под 90%" : row.coverage_status === "ABOVE_RANGE" ? "Над 110%" : row.within_tolerance ? "В допустимите граници" : "Непълни данни"}</small>}</td>{segment && <td>{duration(row.remaining_effective ?? row.unallocated_effective)}</td>}</tr>;
+      const percent = !inactive && typeof target === "number" && target > 0 && typeof actual === "number" && typeof planned === "number" ? 100 * (actual + planned - (typeof row.support_reserve_q === "number" ? row.support_reserve_q : 0)) / target : null;
+      return <tr key={row.zone}><th><span className="management-zone-legend"><i style={{ background: componentColor(row.zone) }} aria-hidden="true"/>{componentLabel(row.zone)}</span><small>{row.basis === "DIRECT_Q" ? "Приравнен обем" : "Товар с разлив"}</small>{inactive ? <small>Изключено в профила</small> : (row.actual_exceeds_target === true || row.actual_effective_exceeds_target === true) && <small>Изпълненото е над целта</small>}{row.activity_status === "CONFLICT" && <small>Ръчната цел противоречи на настройките</small>}</th><td>{duration(row.desired_target_q ?? target)}</td><td>{duration(target)}</td><td>{duration(actual)}</td><td>{duration(planned)}{typeof row.support_reserve_q === "number" && row.support_reserve_q > 0 && <small>Вкл. поддържащ резерв: {duration(row.support_reserve_q)}</small>}</td><td>{inactive ? "—" : duration(remainder(row))}</td><td>{inactive ? "Не участва в покритието" : <>{percent === null ? "—" : `${percent.toFixed(1)}%`}{typeof row.within_tolerance === "boolean" && <small>{row.coverage_status === "BELOW_RANGE" ? "Под 90%" : row.coverage_status === "ABOVE_RANGE" ? "Над 110%" : row.within_tolerance ? "В допустимите граници" : "Непълни данни"}</small>}</>}</td>{segment && <td>{duration(row.remaining_effective ?? row.unallocated_effective)}</td>}</tr>;
     })}</tbody>
   </table></div>;
 }
@@ -57,7 +81,7 @@ export function TrainingPlanSummary({plan, planKind = "DRAFT", ...reportOptions}
   const segments=allocation&&Array.isArray(allocation.segments)?allocation.segments.filter(segment=>isRecord(segment)&&isRecord(segment.components)):[];
   const rows=segments.length?segments.flatMap(segment=>allocationRows(segment.components)):allocationRows(allocation?.components);
   const componentBands=rows.some(r=>typeof r.within_tolerance==="boolean");
-  const shortfall=Array.from(new Set(rows.filter(r=>componentBands?r.within_tolerance!==true:remainder(r)===null||typeof remainder(r)==="number"&&Number(remainder(r))>1).map(r=>r.zone)));
+  const shortfall=Array.from(new Set(rows.filter(r=>r.objective_active!==false&&(componentBands?r.within_tolerance!==true:remainder(r)===null||typeof remainder(r)==="number"&&Number(remainder(r))>1)).map(r=>r.zone)));
   const constraints=allocation&&Array.isArray(allocation.constraints)?allocation.constraints.filter(isRecord):[];
   const limits=allocation&&Array.isArray(allocation.dose_limits)?allocation.dose_limits.map(String):[];
   const strengthBounds=allocation?.strength_feasibility?.segments?.length
@@ -85,6 +109,7 @@ export function TrainingPlanSummary({plan, planKind = "DRAFT", ...reportOptions}
     {allocation&&<>
       {shortfall.length>0&&<aside className="management-notice" role="status"><strong>{componentBands?"Компоненти извън допустимите граници":"Остава непланиран товар"}: {shortfall.join(", ")}.</strong> {componentBands?"Провери недостига, превишението и известността на изпълнението във всеки микроцикъл.":whole?"Целите за целите микроцикли не са покрити изцяло.":"Целта за показаните дати не е покрита изцяло."} Остатъкът остава видим за преглед на ограниченията и разпределението.</aside>}
       {allocation.acceptance && <p>Целим 100% за всеки компонент във всеки микроцикъл. Допустимото покритие е 90–110%; излишъкът в една зона не покрива недостига в друга. Дозата, Q/E и Recovery запазват отделните си ограничения.</p>}
+      {allocation.development && <DevelopmentCoverage segments={allocation.development.segments}/>}
       {segments.length ? <>{segments.map(segment=><AllocationCoverage key={`${segment.window_start}-${segment.window_end}`} components={segment.components} caption={`Дългосрочна цел · ${dateLabel(segment.window_start)} – ${dateLabel(segment.window_end)}`} estimatedHistory={estimatedHistory} segment whole={whole}/>)}</> : <AllocationCoverage components={allocation.components} caption="Покритие на целите за периода" estimatedHistory={estimatedHistory}/>}
       {rows.length>0&&<p className="management-muted">{whole?"Всеки микроцикъл се разпределя като цяло. Таблиците включват изпълненото от началото му и прогнозните сесии след показаните седем дни. Остатъкът не се прехвърля между микроцикли. ":segments.length?"Изпълненото и планираното са за точните показани дати. Всеки отрязък от микроцикъл запазва собствената си дългосрочна цел; непълната седмица получава съответния дял. Остатъкът не се прехвърля между микроцикли. Прекият приравнен обем и оставащият товар с разлив се проверяват отделно. ":"Желаната цел следва дългосрочната динамика. "}Дневната готовност определя изпълнимите задачи. 7/40 и възстановяването се преизчисляват от целия действителен и планиран товар. Непокритата цел остава видима. Ръчните цели за товар се показват в собствената им величина.</p>}
       {lookahead.length>0&&<details><summary>Прогнозно продължение до {dateLabel(allocation.lookahead_end)}</summary><p>Тези сесии участват в разпределението на микроцикъла. Те са предварителна прогноза и се преразглеждат при следващото обновяване.</p><div className="management-table-wrap"><table><thead><tr><th>Дата</th><th>Прогнозна тренировка</th><th>Общо време</th></tr></thead><tbody>{lookahead.flatMap(d=>daySessions(d).length?daySessions(d).map((s,i)=><tr key={`${d.date}-${i}`}><td>{dateLabel(d.date)}</td><td>{s.title}</td><td>{duration(s.total_minutes)}</td></tr>):[<tr key={d.date}><td>{dateLabel(d.date)}</td><td>{d.explanation}</td><td>—</td></tr>])}</tbody></table></div></details>}

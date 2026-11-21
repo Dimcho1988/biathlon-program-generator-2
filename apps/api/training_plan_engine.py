@@ -19,7 +19,7 @@ import pandas as pd
 
 from biathlon import hr_speed, recovery_v2, speed_duration, training_targets, planning_controls, planning_history, planning_schedule, planning_allocation, load_progression, mesocycle_focus, training_return
 from biathlon.constants import COMPONENTS, DEFAULT_PARAMETERS, fresh_parameters
-from biathlon import method_dosing, planning_continuity, planning_envelope, planning_q, daily_intensity
+from biathlon import method_dosing, planning_continuity, planning_envelope, planning_q, daily_intensity, planning_development
 from biathlon.method_dosing import continuous_building_fraction, continuous_maintenance_fraction, recovery_factor, threshold_allowed
 from biathlon.component_load import VERSION as COMPONENT_LOAD_VERSION, DOWNWARD_FACTORS, effective_upper_bound
 from biathlon.equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM, equivalence_slope
@@ -38,8 +38,8 @@ from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 from . import plan_speed_comparison
 
-VERSION = "training-management-v77-shared-daily-intensity"
-PARAMETER_VERSION = "management-parameters-v62"
+VERSION = "training-management-v78-weekly-development-and-coverage"
+PARAMETER_VERSION = "management-parameters-v63"
 MIN_AEROBIC_DOSE_FRACTION = 0.  # Native recipes own their structural minimum; no generic Tmax floor.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -2046,6 +2046,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     actual_activities = [a for a in envelope.get("activities", []) if a.get("local_date", "") <= today.isoformat()]
     configs = model_service.ModelStore(repository).config(alias)
     warnings = list(periodization.get("warnings", []))
+    warnings.extend(planning_consistency.configuration_conflicts(profile))
     warnings += [_warning("DRAFT_REQUIRES_COACH_REVIEW", "Проект за треньорски преглед; не е активирана програма."),
                  _warning("LOAD_ONLY", "Recovery запазва модела само от натоварването. Наблюдаваната реакция се оценява отделно според настройките за прираст."),
                  _warning("CALENDAR_DAY_RESOLUTION", "Готовността е за началото на деня. Всички сесии споделят дневния бюджет; сумарният им товар определя прогнозата за следващите дни. Няма отделна прогноза за възстановяване между сутрешна и следобедна сесия.")]
@@ -2720,7 +2721,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                                   and mesocycle_focus.growth_weight(future_state, fm["zone"]) > 0)
                 if purpose == "BUILDING" and (reentry_dose_active(periodization, d)
                     or fm["zone"] not in day_goals[d][1] and not background
-                    or future_state and future_state["kind"] == "RECOVERY"):
+                    or future_state and future_state["kind"] in {"RECOVERY", "MAINTAIN"}):
                     purpose = "MAINTENANCE"
                 purpose = adaptive_methods.purpose_for(purpose, cap["readiness_policy"])
                 if purpose != "BUILDING":
@@ -2877,6 +2878,17 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         for z, remaining_q in q_remaining.items():
             budgets[z].update(target_weekly_q=goals[z].get("target_weekly_q", goals[z]["target"] if z == "STR" else None), remaining_q=remaining_q)
         period_objectives = active_segment["components"] if active_segment else None
+        development_policy = planning_development.policy(profile, cycle_state, limited=limited, taper=taper)
+        development_count = (planning_development.count(result_days, recorded_sessions,
+            start=active_segment["window_start"], end=active_segment["window_end"])
+            if active_segment and development_policy["target"] else {"total": 0})
+        full_loading_cycle = bool(active_segment and
+            (date.fromisoformat(active_segment["window_end"])-date.fromisoformat(active_segment["window_start"])).days == 6
+            and all(planning_development.policy(profile, values[2])["required"]
+                for d, values in day_goals.items()
+                if active_segment["window_start"] <= d.isoformat() <= active_segment["window_end"]))
+        development_due = bool(full_loading_cycle and development_count["total"] < development_policy["target"]
+            and (profile.get("_allocation_policy") or {}).get("development_first", True))
         continuity_allowed = bool(period_objectives and planning_history_supported and not taper
             and not reentry_dose_active(periodization, day) and period != "TRANSITION"
             and (not cycle_state or cycle_state["kind"] != "RECOVERY"))
@@ -3082,7 +3094,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     future_candidates = [(s, m) for s, m in candidate_catalog(future_day, first_plannable_slot(future_day))[0] if s == future_sport]
                     future_state = day_goals[future_day][2]
                     if (future_kind == "KEY" and future_day.weekday() in double_days and slot_counts[future_day] >= 2
-                        and (not future_state or future_state["kind"] != "RECOVERY")
+                        and (not future_state or future_state["kind"] not in {"RECOVERY", "MAINTAIN"})
                         and key_limit-key_sessions >= 2
                         and (profile.get("age_years") or 0) >= 18 and (profile.get("training_experience_years") or 0) >= 1):
                         future_candidates = adaptive_methods.threshold_pairs(future_candidates, (controls or {}).get("double_threshold_components", ["Z3"])) + future_candidates
@@ -3139,7 +3151,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                                           and mesocycle_focus.growth_weight(future_state, fz) > 0)
                         if future_purpose == "BUILDING" and (reentry_dose_active(periodization, future_day)
                             or fz not in day_goals[future_day][1] and not background
-                            or future_state and future_state["kind"] == "RECOVERY"):
+                            or future_state and future_state["kind"] in {"RECOVERY", "MAINTAIN"}):
                             future_purpose = "MAINTENANCE"
                         if fm.get("double_threshold"):
                             future_purpose = "BUILDING"
@@ -3387,7 +3399,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             separate_slots = min(max(0, session_limit-sessions), planning_allocation.remaining_slots(
                 free_slots, day, slot_index, segment_keys=allocation_segments))
             if (day.weekday() in double_days and slot_index == first_plannable_slot(day) and unexecuted_slot_count(day) >= 2 and not limited and not taper
-                    and (not cycle_state or cycle_state["kind"] != "RECOVERY")
+                    and (not cycle_state or cycle_state["kind"] not in {"RECOVERY", "MAINTAIN"})
                     and sessions + 2 <= session_limit and key_sessions + 2 <= key_limit
                     and (profile.get("age_years") or 0) >= 18 and (profile.get("training_experience_years") or 0) >= 1):
                 candidates = adaptive_methods.threshold_pairs(candidates, controls.get("double_threshold_components", ["Z3"])) + candidates
@@ -3432,7 +3444,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 # Key spacing belongs to the resolved role, not the template label.
                 initial_purpose = method["purpose"]
                 background = bool(cycle_state and cycle_state.get("background_development") and mesocycle_focus.growth_weight(cycle_state, z) > 0)
-                if initial_purpose == "BUILDING" and (reentry_dose_active(periodization, day) or z not in selected_accents and not background or taper or cycle_state and cycle_state["kind"] == "RECOVERY"):
+                if initial_purpose == "BUILDING" and (reentry_dose_active(periodization, day) or z not in selected_accents and not background or taper or cycle_state and cycle_state["kind"] in {"RECOVERY", "MAINTAIN"}):
                     initial_purpose = "MAINTENANCE"
                 if method.get("double_threshold"):
                     initial_purpose = "BUILDING"
@@ -3577,7 +3589,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         maintenance_q, maintenance_load, _ = candidate_load(maintenance_blocks, capacity=evidence)
                         endurance_allocation = allocation[z] > objective_load(maintenance_q, maintenance_load)[z] + .5
                 background_development = bool(cycle_state and cycle_state.get("background_development") and mesocycle_focus.growth_weight(cycle_state, z) > 0)
-                if purpose == "BUILDING" and (reentry_dose_active(periodization, day) or z not in selected_accents and not endurance_allocation and not background_development or taper or cycle_state and cycle_state["kind"] == "RECOVERY"):
+                if purpose == "BUILDING" and (reentry_dose_active(periodization, day) or z not in selected_accents and not endurance_allocation and not background_development or taper or cycle_state and cycle_state["kind"] in {"RECOVERY", "MAINTAIN"}):
                     purpose = "MAINTENANCE"
                 if method.get("double_threshold"):
                     purpose = "BUILDING"
@@ -3630,6 +3642,11 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     overhead = sum(m["warmup_min"] + m["cooldown_min"] + m.get("recovery_min",0.) for m in (method,other))
                 limits = [{"code": "METHOD_WORK_CAP", "limit_minutes": method["max_work_min"]},
                           {"code": "TECHNICAL_SESSION_CEILING" if availability_mode == "AUTO_HISTORY" else "DAILY_AVAILABLE_WORK", "limit_minutes": max(0., day_available - overhead)}]
+                if method["structure"] == "STRENGTH_CIRCUIT" and not method.get("strength_profile"):
+                    # Legacy circuits have indivisible three-minute work units.
+                    # Frequency must not round a reduced Recovery dose upward
+                    # to another full circuit; rest/transitions are charged later.
+                    limits.append({"code": "STRENGTH_ROLE_RECOVERY_BUDGET", "limit_minutes": requested})
                 allocation_policy = profile.get("_allocation_policy") or {}
                 search_cap = allocation_policy.get("easy_caps", {}).get(day.isoformat())
                 if search_cap is not None and z in allocation_policy.get("easy_cap_zones", ["Z1", "Z2"]):
@@ -3739,6 +3756,30 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     minimum_q, minimum_e, _ = candidate_load(minimum_blocks, capacity=evidence)
                     minimum_load = objective_load(minimum_q, minimum_e)[z]
                     maximum_load = objective_load(direct, effective)[z]
+                    developmental_core = False
+                    if development_due and purpose == "BUILDING":
+                        # A duration-distribution preference must not split a
+                        # feasible building dose into several maintenance doses.
+                        # Find the smallest whole developmental core within the
+                        # already legal dose; this is not a new load allowance.
+                        probe = {"purpose": purpose, "zone": z, "dose_evidence": {
+                            **evidence, "base_fraction": base_fraction*_primary_work_share(method)}}
+                        def builds(parts):
+                            return planning_development.is_developmental({**probe, "blocks": parts})
+                        if builds(blocks):
+                            lo, hi = method["min_work_min"], work
+                            for _ in range(20):
+                                midpoint = (lo+hi)/2
+                                if builds(_blocks(method, midpoint, evidence, settings)):
+                                    hi = midpoint
+                                else:
+                                    lo = midpoint
+                            core_work = _whole_work_at_most(method, hi, work)
+                            core = _blocks(method, core_work, evidence, settings)
+                            if builds(core):
+                                cq, ce, _ = candidate_load(core, capacity=evidence)
+                                minimum_load = max(minimum_load, objective_load(cq, ce)[z])
+                                developmental_core = True
                     remaining_slots = (planning_allocation.remaining_slots(opportunities[z], day, slot_index,
                         segment_keys=allocation_segments) if is_key else separate_slots)
                     # Use observed duration to spread work when there are
@@ -3755,9 +3796,15 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                             rq, re, _ = candidate_load(reference_parts, capacity=evidence)
                             preferred = planning_allocation.dose_share(allocation[z], minimum_load,
                                 objective_load(rq, re)[z], remaining_slots)
-                            if preferred is not None:
+                            if preferred is not None and objective_load(rq, re)[z] >= minimum_load:
                                 maximum_load = min(maximum_load, objective_load(rq, re)[z])
                     share = planning_allocation.dose_share(allocation[z], minimum_load, maximum_load, remaining_slots)
+                    if developmental_core:
+                        wanted = min(remaining_slots, development_policy["target"]-development_count["total"])
+                        for count in range(wanted, 1, -1):
+                            if minimum_load <= allocation[z]/count <= maximum_load:
+                                share = allocation[z]/count
+                                break
                     if z == "Z1" and purpose == "RECOVERY" and allocation_policy.get("spread_recovery"):
                         future_days = len({d for d,s in free_slots if d >= day
                             and (allocation_segments is None or allocation_segments[d] == allocation_segments[day])})
@@ -4171,7 +4218,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         slot = min(record.get("slots", [record.get("slot", 0)]))
                         if purpose == "BUILDING" and not method.get("double_threshold") and (
                             reentry_dose_active(periodization, placed_day) or method["zone"] not in day_goals[placed_day][1] or future_taper
-                            or future_state and future_state["kind"] == "RECOVERY"):
+                            or future_state and future_state["kind"] in {"RECOVERY", "MAINTAIN"}):
                             purpose = "MAINTENANCE"
                         nominal = _nominal_fraction(method, purpose, profile, "RE_ENTRY" if reentry_dose_active(periodization, placed_day) else future_period, cap, controls)
                         factor = cap["readiness_dose_factor"]
@@ -4426,11 +4473,19 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     return (not c[2].get("double_threshold") if day.weekday() in double_days else False,
                         not c[2]["is_key_session"] if day.weekday() in set(threshold_days + double_days)
                             and day in key_slots and slot_index == first_plannable_slot(day) else False,
+                        bool(profile.get("neuromuscular", {}).get("enabled")
+                            and day.weekday() in profile.get("neuromuscular", {}).get("days", []))
+                            and not c[2].get("neuromuscular_exposure"),
+                        bool(preferred) and not any(r["method_id"] == c[2]["method_id"] and r["sport"] == c[2]["sport"] for r in preferred),
+                        # Reserve real developmental work before optional
+                        # maintenance consumes its weekly room. Every choice
+                        # here already passed time, Q/E, Recovery and the
+                        # shared daily intensity ledger; labels alone do not count.
+                        development_due and not planning_development.is_developmental(c[2]),
                         unrepresented,
                         *gap_priority,
                         not c[2]["is_key_session"] if day in key_slots and slot_index == first_plannable_slot(day) else False,
                         bool(allowance.get("mode") in {"POST_TARGET_MAINTENANCE", "PLANNED_EASY_MAINTENANCE"} or extra_taper),
-                        bool(preferred) and not any(r["method_id"] == c[2]["method_id"] and r["sport"] == c[2]["sport"] for r in preferred),
                         c[2]["direct_equivalent_minutes"]["Z1"] if gap_priority and c[2]["zone"] != "Z1" else 0.,
                         not (c[2]["zone"] == "Z1" and c[2]["purpose"] != "RECOVERY"
                              and choice_methods[(c[2]["sport"], c[2]["method_id"])]["structure"] in {"CONTINUOUS", "TWO_REPETITIONS"})
@@ -4695,6 +4750,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         item["rejected_alternatives"] = compact_rejections(item["rejected_alternatives"])
     planned_sessions = [s for d in result_days for s in planning_schedule.day_sessions(d)]
     for session in planned_sessions:
+        if session.get("execution_descriptor") is not None:
+            session["execution_descriptor"]["developmental"] = planning_development.session_evidence(session)
         if any(b["zone"] == "STR" for b in session["blocks"]):
             session["strength_duration"] = _strength_duration(session["blocks"])
         if session.get("dose_evidence", {}).get("strength_profile"):
@@ -4711,6 +4768,9 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     allocation_report = planning_allocation.report(goal_windows, rows, forecast_rows, result_days,
         sum(n for d,n in slot_counts.items() if d <= display_end), session_limit, weekly_minutes, source=source, segment_keys=segment_keys if component_governed else None) if component_governed and forecast_known and not blocked else None
     if allocation_report:
+        allocation_report["development"] = planning_development.report(profile,
+            allocation_report.get("segments") or [allocation_report], result_days, recorded_sessions,
+            cycles={d.isoformat(): value[2] for d, value in day_goals.items()}, limited=limited)
         continuity_sessions = [{"date":d["date"], "method_id":s["method_id"],
             "mode":s["dose_evidence"]["continuity"]["mode"],
             "rolling_limits_preserved":s["dose_evidence"]["continuity"]["rolling_limits_preserved"],
@@ -4790,6 +4850,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                              if visible_time_limit is not None else float("inf"))
         remaining = max(0., weekly_ceiling-actual_window_minutes-sum(s["total_minutes"] for s in planned_sessions))
     parameters = {"version": PARAMETER_VERSION, "method_library": method_library.provenance(), "method_registry_version": method_registry.VERSION,
+                  "development_policy": {"version": planning_development.VERSION,
+                      "loading_minimum": 2, "desired_count": max(2, profile.get("max_key_sessions_per_week", 2)),
+                      "maintenance_and_recovery": "MAINTENANCE_ONLY",
+                      "scope": "WHOLE_MICROCYCLE_ALL_COMPONENTS", "high_intensity_ceiling_unchanged": True},
                   "daily_intensity_policy": {"version": daily_intensity.VERSION,
                       "maintenance_limit": daily_intensity.MAINTENANCE_LIMIT,
                       "building_limit": daily_intensity.BUILDING_LIMIT,

@@ -135,10 +135,12 @@ def test_loading_experiment_cannot_expand_protected_phases(period, kind, taper):
 
 def test_strength_uses_its_own_effective_budget_without_an_aerobic_q_capacity():
     profile, _, _, rows, context = setup_context(factor=.95)
+    profile["strength_enabled"] = True  # This test exercises an active strength objective.
     context["components"]["STR"]["recent_observed_q"] = 30
     context["individual_learning"]["components"]["STR"] = {"volume_factor": .95, "intensity_delta": 0}
     baseline = goals(profile, rows, {k: v for k, v in context.items() if k != "individual_learning"})
     result = goals(profile, rows, context)
+    assert baseline["STR"]["target"] > 0.
     assert "target_weekly_q" not in result["STR"]
     assert result["STR"]["target"] == pytest.approx(baseline["STR"]["target"]*.95)
 

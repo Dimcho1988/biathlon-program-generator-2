@@ -17,6 +17,17 @@ def reservation_methods(plan):
             for d in [*plan["days"], *plan.get("lookahead_days", [])] if not d.get("locked")}
 
 
+def development_shortfalls(plan):
+    """Use the engine's real-dose, whole-cycle count; never infer from labels."""
+    development = (plan.get("allocation") or {}).get("development") or {}
+    return (development.get("minimum_shortfall", 0), development.get("target_shortfall", 0))
+
+
+def needs_search(plan):
+    return (planning_allocation.needs_search(plan.get("allocation") or {})
+            or any(development_shortfalls(plan)))
+
+
 def score(plan, accents):
     """Reduce every local component gap before using accent tie-breakers.
 
@@ -35,7 +46,13 @@ def score(plan, accents):
         if item.get("mode") == "QUALITY_PREPARATION_RESERVE")
     sessions = [s for d in [*plan.get("days", []), *plan.get("lookahead_days", [])] for s in d.get("sessions", [])]
     training_days = len({d["date"] for d in [*plan.get("days", []), *plan.get("lookahead_days", [])] if d.get("sessions")})
-    return (*planning_allocation.gap_score(rows), training_days, round(sum(accent_credit), 5),
+    worst_gap, total_gap, distance = planning_allocation.gap_score(rows)
+    minimum_shortfall, target_shortfall = development_shortfalls(plan)
+    # Within the accepted component band, real developmental exposures precede
+    # a smaller numerical rounding error. Outside-band deficits still lead;
+    # three sessions cannot buy missing work in another component or cycle.
+    return (worst_gap, total_gap, -minimum_shortfall, -target_shortfall, distance,
+            training_days, round(sum(accent_credit), 5),
             -round(preparation_cost, 5), -len(sessions))
 
 
@@ -105,7 +122,7 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
             and available[date.fromisoformat(d["date"]).weekday()] > 0 for d in plan["days"])
     # Accents only break ties after all component gaps have been compared.
     accents = accents or {z for z in ("Z3", "Z4", "Z5", "STR") if allocation["components"].get(z, {}).get("target", 0.) > 0}
-    unmet = planning_allocation.needs_search(allocation)
+    unmet = needs_search(baseline)
     trials, refits, best = 0, 0, baseline
     budget_exhausted = False
     def time_available():
@@ -129,10 +146,14 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
             {"optional_easy_fraction": .5, "easy_caps": {d:w*.85 for d,w in easy.items() if w > 0}},
             {"optional_easy_fraction": 0., "balance_complete_doses": False, "prefer_standalone": True},
         ]
+        if any(development_shortfalls(baseline)):
+            # Reuse the first causal alternative; do not add another full
+            # replay merely to improve the session-count objective.
+            policies[0]["development_first"] = True
         if not unmet:
             policies = [policies[1]]  # Only distribution needs another trial.
         for index, policy in enumerate(policies):
-            if not planning_allocation.needs_search(best["allocation"]) and not empty_requested_day(best):
+            if not needs_search(best) and not empty_requested_day(best):
                 break
             if not time_available():
                 break
@@ -146,7 +167,7 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
             # Reconcile the first quality-first schedule immediately. On a
             # slower worker the budget may permit only two complete replays;
             # broad easy-work variants must not displace this causal refit.
-            if (index == 0 and planning_allocation.needs_search(best["allocation"])
+            if (index == 0 and needs_search(best)
                 and any(reservation_methods(best).values()) and time_available()):
                 began = monotonic()
                 candidate = replay({**((best.get("parameters") or {}).get("allocation_policy") or policy),
@@ -169,7 +190,7 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
         # Re-run causally with the selected future methods after exploring
         # the scheduling heuristics. A changed reservation never edits blocks in place:
         # every new repetition and every later dose passes the full engine.
-        if planning_allocation.needs_search(best["allocation"]) and any(s.get("method_id") for d in baseline["days"] for s in d.get("sessions", [])):
+        if needs_search(best) and any(s.get("method_id") for d in baseline["days"] for s in d.get("sessions", [])):
             for _ in range(2):
                 if not time_available():
                     break
@@ -182,7 +203,7 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
                 if score(candidate, accents) <= score(best, accents):
                     break
                 best = candidate
-        if planning_allocation.needs_search(best["allocation"]) and time_available():
+        if needs_search(best) and time_available():
             # Cap only early Z1 work; keep the Z2 accent intact and leave later
             # empty training days uncapped. This is another causal trial, not
             # an instruction to fill rest days or invent short fragments.
@@ -201,12 +222,25 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
                 trials += 1
                 if score(candidate, accents) > score(best, accents):
                     best = candidate
-    best["allocation"]["search"] = {"version": "bounded-causal-replay-v9-objective-quality-doses", "alternatives": trials,
+    minimum_shortfall, target_shortfall = development_shortfalls(best)
+    configuration_conflict = any(row.get("activity_status") == "CONFLICT"
+        for _, row in planning_allocation.objective_rows(best["allocation"]))
+    coverage_met = planning_allocation.acceptance(best["allocation"])["within_tolerance"]
+    if configuration_conflict:
+        conclusion = "CONFIGURATION_CONFLICT"
+    elif coverage_met and not target_shortfall:
+        conclusion = ("TARGETS_WITHIN_TOLERANCE" if best["allocation"].get("has_unallocated_load",
+            any((row.get("remaining") or 0) > 1. for _, row in planning_allocation.objective_rows(best["allocation"])))
+            else "TARGETS_COVERED")
+    else:
+        conclusion = "SEARCH_BUDGET_EXHAUSTED" if budget_exhausted else "CHECKED_VARIANTS_EXHAUSTED"
+    best["allocation"]["search"] = {"version": "bounded-causal-replay-v10-development-and-coverage", "alternatives": trials,
         "reservation_replays":refits,
-        "improved": best is not baseline, "priority": ["WORST_COMPONENT_RANGE_GAP", "SUM_COMPONENT_RANGE_GAPS", "DISTANCE_TO_100_PERCENT", "TRAINING_DAYS", "ACCENT", "PREPARATION_EXCESS", "FEWER_SESSIONS", "STABILITY"],
-        "conclusion": ("TARGETS_WITHIN_TOLERANCE" if planning_allocation.acceptance(best["allocation"])["within_tolerance"]
-            and best["allocation"].get("has_unallocated_load", any((row.get("remaining") or 0) > 1. for _, row in planning_allocation.objective_rows(best["allocation"])))
-            else "TARGETS_COVERED" if planning_allocation.acceptance(best["allocation"])["within_tolerance"]
-            else "SEARCH_BUDGET_EXHAUSTED" if budget_exhausted else "CHECKED_VARIANTS_EXHAUSTED"),
+        "improved": best is not baseline, "priority": ["WORST_COMPONENT_RANGE_GAP", "SUM_COMPONENT_RANGE_GAPS",
+            "DEVELOPMENT_MINIMUM_SHORTFALL", "DEVELOPMENT_TARGET_SHORTFALL", "DISTANCE_TO_100_PERCENT",
+            "TRAINING_DAYS", "ACCENT", "PREPARATION_EXCESS", "FEWER_SESSIONS", "STABILITY"],
+        "conclusion": conclusion, "coverage_within_tolerance": coverage_met,
+        "development_minimum_met": minimum_shortfall == 0, "development_target_met": target_shortfall == 0,
+        "configuration_conflict": configuration_conflict,
         "hard_limit_proven": False}
     return best

@@ -7,11 +7,49 @@
 from .constants import COMPONENTS
 from .component_load import calculate_component_load
 
-VERSION = "q-objectives-v4-preserved-intent"
+VERSION = "q-objectives-v5-active-components"
+
+
+def configuration_conflicts(profile):
+    """Keep an explicit coach objective visible when its activity is disabled."""
+    manual = profile.get("component_targets_weekly") or {}
+    if not profile.get("strength_enabled", False) and manual.get("STR", 0.) > 0:
+        return [{"code": "DISABLED_COMPONENT_TARGET", "component": "STR",
+                 "requested_target": manual["STR"],
+                 "message": "Има ръчно зададена цел за сила, но силовите тренировки са изключени. Включете ги или коригирайте целта."}]
+    return []
+
+
+def align_active_components(goals, profile, reference):
+    """History remains descriptive; a disabled activity has no automatic quota.
+
+    This runs after progression and recovery, including the legacy and limited
+    history paths. It never turns an explicit, conflicting goal into a zero.
+    """
+    if profile.get("strength_enabled", False) or "STR" not in goals:
+        return goals
+    goal = goals["STR"]
+    conflicts = configuration_conflicts(profile)
+    goal["activity"] = {"enabled": False, "status": "CONFLICT" if conflicts else "DISABLED",
+                        "automatic_target_before_exclusion": goal["target"] if not conflicts else None}
+    if conflicts:
+        goal["activity"]["conflict"] = conflicts[0]
+        return goals
+    goal.update(target=0., factor=0., development=False)
+    # Strength has its own native target. Reporting derives direct Q from it;
+    # do not introduce the aerobic target/capacity fields for an inactive goal.
+    goal.pop("target_weekly_q", None)
+    goal.pop("desired_weekly_q", None)
+    base = reference.get("STR", {})
+    denominator = base.get("b50", 0.) + base.get("c40", 0.)
+    if denominator:
+        goal["target_index"] = base.get("b50", 0.) / denominator
+    return goals
 
 
 def reconcile(goals, profile, state, reference, *, limited=False, taper=False,
               zone_tmax_minutes=None, capacity_sources=None):
+    goals = align_active_components(goals, profile, reference)
     if limited or not state or not (profile.get("load_progression") or {}).get("enabled", False):
         return goals
     automatic = [z for z in COMPONENTS if z != "STR" and goals[z].get("target_weekly_q") is not None
