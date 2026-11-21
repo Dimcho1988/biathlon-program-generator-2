@@ -22,6 +22,7 @@ from fastapi import APIRouter
 from .. import dependencies
 from ..sync_service import optional_iso
 from ..hr_zone_times import synchronize_hr_zone_times
+from ..activity_laps import enrich_activity_laps, add_comparison_channels
 
 from ..prepared_views import endpoint as prepared_endpoint
 
@@ -253,6 +254,7 @@ def _activity_view_payload(
         [item for item in shadow_zone_summary if isinstance(item, Mapping)],
     )
     method = (raw_shadow or {}).get("hr_zone_time_method")
+    detail["intervals"], detail["device_laps_status"] = enrich_activity_laps(catalog, raw_shadow, raw_series)
     if isinstance(method, Mapping):
         detail["hr_zone_times"] = [{"zone": item["zone_name"], "raw_time_s": item["raw_seconds"],
                                     "hrmod_time_s": item["hrmod_final_seconds"]}
@@ -261,7 +263,7 @@ def _activity_view_payload(
     series = None
     if isinstance(raw_series, Mapping):
         series = {
-            **downsample_model_input(raw_series),
+            **add_comparison_channels(downsample_model_input(raw_series), raw_shadow),
             "activity_ref": activity_ref,
         }
     return {

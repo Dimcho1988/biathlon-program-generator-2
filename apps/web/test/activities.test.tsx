@@ -111,7 +111,7 @@ describe("canonical activity detail", () => {
     container.innerHTML = renderToStaticMarkup(<ActivityDetailView activity={activity} series={null} />);
     const section = container.querySelector(".activity-zones")!;
     expect(section.textContent).toContain("моделите използват HRmod");
-    expect(section.textContent).toContain("Измерен пулс · Raw HR");
+    expect(section.textContent).toContain("Измерен пулс");
     expect(section.textContent).toContain("Модулиран пулс · HRmod");
     expect([...section.querySelectorAll("tbody tr")].map(row => [...row.children].map(cell => cell.textContent)))
       .toEqual([["Z4", "0:01:01", "0:02:02"], ["Z5", "0:00:00", "0:00:35"]]);
@@ -136,11 +136,11 @@ describe("canonical activity detail", () => {
 
   it("keeps canonical metrics, private note and experimental route visibly separate", () => {
     const html = renderToStaticMarkup(<ActivityDetailView activity={activityDetailFixture} series={activitySeriesFixture} />);
-    expect(html).toContain("Canonical activity");
-    expect(html).toContain("Canonical load");
+    expect(html).toContain("Изпълнена тренировка");
+    expect(html).toContain("Отчетено натоварване");
     expect(html).toContain("Отчетено време по зони");
     expect(html).toContain("Лично съдържание");
-    expect(html).toContain("Experimental · Raw ↔ Shadow");
+    expect(html).toContain("Подробен анализ");
     expect(html).toContain(`/activities/${activityDetailFixture.activity_ref}/shadow`);
     expect(html).toContain("Предишна активност");
     expect(html).toContain("aria-label=\"Пулс\"");
@@ -155,9 +155,9 @@ describe("canonical activity detail", () => {
       series: activitySeriesFixture.series.map((point) => ({ ...point, grade_pct: null })),
     };
     const html = renderToStaticMarkup(<ActivityDetailView activity={activityDetailFixture} series={seriesWithoutGrade} />);
-    expect(html).toContain("Наклонът не е част от canonical серията");
+    expect(html).toContain("Наличният изгладен наклон");
     expect(html).toContain(`/activities/${activityDetailFixture.activity_ref}/shadow`);
-    expect(html).toContain("Experimental анализа");
+    expect(html).toContain("подробния анализ");
   });
 
   it("accepts one coherent generation-pinned activity view and legacy revision zero", () => {
@@ -190,7 +190,7 @@ describe("canonical activity detail", () => {
 
   it("keeps the canonical summary visible when timeseries are temporarily unavailable", () => {
     const html = renderToStaticMarkup(<ActivityDetailView activity={activityDetailFixture} series={null} seriesUnavailable />);
-    expect(html).toContain("Canonical load");
+    expect(html).toContain("Отчетено натоварване");
     expect(html).toContain("Графиките временно не са заредени");
     expect(html).toContain("Отчетено време по зони");
   });

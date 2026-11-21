@@ -117,6 +117,34 @@ def test_detail_and_comparison_use_the_same_intervals_without_mutating_pinned_da
     assert row == before
 
 
+def test_original_laps_and_comparison_channels_use_pinned_models_without_exposing_cache():
+    from apps.api.routes.activities import _activity_view_payload
+    from apps.api.activity_catalog import activity_detail_payload
+    row = _active_row()
+    row["catalog_payload"]["intervals"] = [{
+        "source": "device_laps", "status": "available", "fingerprint": "internal-file-cache",
+        "laps": [{"source": "device", "start_time_s": 0, "end_time_s": 1,
+                  "timer_time_s": 1, "average_hr_bpm": 151, "average_speed_kmh": 14.4}],
+    }]
+    row["shadow_payload"]["timeseries"] = [{
+        "elapsed_s": 0, "hr_raw_bpm": 151, "hrmod_final_bpm": 160, "vflat_b65_kmh": 15,
+    }]
+    row["shadow_payload"]["speed_test_series"] = [{
+        "elapsed_s": 1, "dt_s": 1, "speed_raw_kmh": 14.4, "vflat_b65_kmh": 15,
+    }]
+    before = deepcopy(row)
+    payload = _activity_view_payload(row, ACTIVITY_REF)
+    assert payload["activity"]["device_laps_status"] == "available"
+    lap = payload["activity"]["intervals"][0]
+    assert lap["average_hrmod_bpm"] == 160
+    assert lap["average_vflat_kmh"] == 15
+    assert payload["series"]["series"][0]["hrmod_bpm"] == 160
+    assert payload["series"]["series"][0]["vflat_kmh"] == 15
+    assert "internal-file-cache" not in str(payload)
+    assert activity_detail_payload(row["catalog_payload"])["intervals"][0]["source"] == "device"
+    assert row == before
+
+
 def test_activity_view_is_one_generation_pinned_repository_read(monkeypatch):
     class Repository:
         def __init__(self):

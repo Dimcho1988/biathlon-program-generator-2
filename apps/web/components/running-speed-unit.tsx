@@ -1,7 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-import { RUNNING_SPEED_UNIT_KEY, type RunningSpeedUnit, speedText } from "../lib/speed-format";
+import { RUNNING_SPEED_UNIT_KEY, type RunningSpeedUnit, speedText, speedValue, isRunningSport } from "../lib/speed-format";
 
 const eventName = "onflows-running-speed-unit-change";
 let memoryUnit: RunningSpeedUnit = "pace";
@@ -23,6 +23,8 @@ export function RunningSpeedUnitControl() {
   const unit = useRunningSpeedUnit();
   return <label className="running-speed-unit">Бягане · показване <select value={unit} onChange={e => setRunningSpeedUnit(e.target.value as RunningSpeedUnit)}><option value="pace">Темпо, мин/км</option><option value="kmh">Скорост, км/ч</option></select></label>;
 }
-export function PreferredSpeed({ speed, sport }: { speed?: number | null; sport?: string | null }) {
-  return <>{speedText(speed, useRunningSpeedUnit(), sport)}</>;
+export function PreferredSpeed({ speed, sport, includeUnit = true }: { speed?: number | null; sport?: string | null; includeUnit?: boolean }) {
+  const unit = useRunningSpeedUnit();
+  if (!includeUnit && speed === 0 && !(isRunningSport(sport) && unit === "pace")) return <>0</>;
+  return <>{includeUnit ? speedText(speed, unit, sport) : speedValue(speed, unit, sport)}</>;
 }

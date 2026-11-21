@@ -264,6 +264,11 @@ class IntervalsClient:
     def get_streams(self, activity_id: str) -> Any:
         return self.get_streams_result(activity_id).payload
 
+    def get_activity_file_result(self, activity_id: str) -> IntervalsResponse:
+        """Original device file, never the regenerated FIT with edited intervals."""
+        safe_id = _validated_identifier(activity_id, field_name="activity_id")
+        return self._get_result(f"/api/v1/activity/{_path_segment(safe_id)}/file", binary=True)
+
     def get_streams_result(self, activity_id: str) -> IntervalsResponse:
         safe_activity_id = _validated_identifier(
             activity_id, field_name="activity_id"
@@ -290,11 +295,11 @@ class IntervalsClient:
         return self._get_result(path, params=params)
 
     def _get_result(
-        self, path: str, *, params: dict[str, str] | None = None
+        self, path: str, *, params: dict[str, str] | None = None, binary: bool = False
     ) -> IntervalsResponse:
         url = f"{API_BASE_URL}{path}"
         headers = {
-            "Accept": "application/json",
+            "Accept": "application/octet-stream" if binary else "application/json",
             "Authorization": f"Bearer {self._access_token}",
         }
 
@@ -347,6 +352,11 @@ class IntervalsClient:
                 )
             if status == 204:
                 return IntervalsResponse(status_code=status, payload=None)
+
+            if binary:
+                if len(response.content) > 32 * 1024 * 1024:
+                    raise IntervalsAPIError("Оригиналният файл е твърде голям.", terminal=True)
+                return IntervalsResponse(status_code=status, payload=response.content)
 
             try:
                 payload = response.json()
