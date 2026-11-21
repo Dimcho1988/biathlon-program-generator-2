@@ -15,7 +15,8 @@ from apps.api.shadow_models.hrmod_v4 import SOURCE_COMMIT, run_hrmod_v4_shadow
 from apps.api.shadow_models.vflat_b65 import run_vflat_b65_shadow, speed_comparison
 from apps.api.trainability import MODEL_VERSION as TRAINABILITY_MODEL_VERSION, compute_trainability
 from vflat_b65.terrain_correction import terrain_metadata
-from vflat_b65.sports import is_running, is_cycling, is_treadmill, is_nordic, speed_model_versions
+from vflat_b65.sports import is_running, is_cycling, is_treadmill, is_nordic, is_snow_ski, speed_model_versions
+from vflat_b65.nordic_speed import prepare_speed as prepare_ski_speed
 from vflat_b65.load import VERSION as SPEED_LOAD_SAMPLES_VERSION
 from biathlon.sport_heart_rate import reference_offset, policy as sport_hr_policy
 from biathlon.unified_load import HR_INTERVAL_VERSION
@@ -110,7 +111,7 @@ def activity_shadow_configuration_fingerprint(
     a shadow model/configuration changes.
     """
     sport = sport or (activity_detail or {}).get("type")
-    versions = speed_model_versions(sport) if is_running(sport) or is_cycling(sport) else (VFLAT_MODEL_VERSION, VFLAT_CONFIG_VERSION)
+    versions = speed_model_versions(sport) if is_running(sport) or is_cycling(sport) or is_snow_ski(sport) else (VFLAT_MODEL_VERSION, VFLAT_CONFIG_VERSION)
     payload = {
         "schema_version": SHADOW_CONFIGURATION_SCHEMA_VERSION,
         "trainability_model_version": TRAINABILITY_MODEL_VERSION,
@@ -252,6 +253,12 @@ def _model_inputs(detail: Mapping[str, Any], normalized: IntervalAwareResult):
         np.nan if _first(point, _DISTANCE_NAMES) is None else _first(point, _DISTANCE_NAMES)
         for point in points
     ], dtype=float)
+    ski_speed_sources = None
+    if is_snow_ski(detail.get("type")):
+        speed, ski_speed_sources = prepare_ski_speed(
+            np.asarray([point.offset_sec for point in points], dtype=float),
+            distance, speed, one_hz.segment_slices, terrain_metadata(detail)["distance_m"],
+        )
     vflat_config = VFlatB65Config()
     grade = provider_grade.copy()
     blocks = np.full(len(points), -1, dtype=int)
@@ -290,6 +297,8 @@ def _model_inputs(detail: Mapping[str, Any], normalized: IntervalAwareResult):
     )
     if is_cycling(detail.get("type")):
         vflat_frame["cadence_rpm"] = [np.nan if _first(p,("cadence",)) is None else _first(p,("cadence",)) for p in points]
+    if ski_speed_sources is not None:
+        vflat_frame.attrs["speed_input"] = ski_speed_sources
     return samples, references, vflat_frame
 
 
@@ -550,6 +559,7 @@ def compute_activity_shadow(
             "vflat": {
                 "status": vflat.get("status"),
                 **({"config":vflat.get("config"),"hr_policy":sport_hr_policy(detail.get("type"),zone_bounds_bpm,explicit_hrmax_bpm)} if offset else {}),
+                **({"speed_input": vflat_frame.attrs["speed_input"]} if "speed_input" in vflat_frame.attrs else {}),
                 "terrain_correction": vflat.get("terrain_correction"),
                 "sprint_str": vflat.get("sprint_str_summary", {}),
             },
