@@ -10,7 +10,7 @@ from tests.api.test_training_plan_engine import TODAY, NOW, reference_speed
 
 
 def test_recovery_reduces_observed_q_and_e_once_and_preserves_stable_anchor():
-    p = configured()
+    p = configured(strength_enabled=True)  # All six components are active here.
     _, source, rows = observed()
     ctx = load_progression.context(p, source, rows, TODAY)
     anchor = deepcopy(ctx["anchor"])

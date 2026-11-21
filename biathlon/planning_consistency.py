@@ -35,15 +35,15 @@ def align_active_components(goals, profile, reference):
     if conflicts:
         goal["activity"]["conflict"] = conflicts[0]
         return goals
-    goal.update(target=0., target_weekly_q=0., desired_weekly_q=0., factor=0., development=False)
+    goal.update(target=0., factor=0., development=False)
+    # Strength has its own native target. Reporting derives direct Q from it;
+    # do not introduce the aerobic target/capacity fields for an inactive goal.
+    goal.pop("target_weekly_q", None)
+    goal.pop("desired_weekly_q", None)
     base = reference.get("STR", {})
     denominator = base.get("b50", 0.) + base.get("c40", 0.)
     if denominator:
         goal["target_index"] = base.get("b50", 0.) / denominator
-    if goal.get("progression"):
-        for field in ("target_weekly_q", "desired_weekly_q"):
-            if field in goal["progression"]:
-                goal["progression"][field] = 0.
     return goals
 
 

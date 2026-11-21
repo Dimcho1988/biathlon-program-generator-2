@@ -70,7 +70,8 @@ def test_disabled_strength_excludes_automatic_target_without_erasing_history(mod
                               {"kind": "RECOVERY" if mode == "recovery" else "BUILD"},
                               reference, limited=mode == "limited")
     strength = result["STR"]
-    assert strength["target"] == strength["target_weekly_q"] == strength["desired_weekly_q"] == 0.
+    assert strength["target"] == 0.
+    assert "target_weekly_q" not in strength and "desired_weekly_q" not in strength
     assert strength["reference"] == 140.
     assert strength["activity"]["status"] == "DISABLED"
     assert strength["activity"]["automatic_target_before_exclusion"] == 140.

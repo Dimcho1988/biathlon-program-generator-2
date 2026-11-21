@@ -4468,6 +4468,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     return (not c[2].get("double_threshold") if day.weekday() in double_days else False,
                         not c[2]["is_key_session"] if day.weekday() in set(threshold_days + double_days)
                             and day in key_slots and slot_index == first_plannable_slot(day) else False,
+                        bool(profile.get("neuromuscular", {}).get("enabled")
+                            and day.weekday() in profile.get("neuromuscular", {}).get("days", []))
+                            and not c[2].get("neuromuscular_exposure"),
+                        bool(preferred) and not any(r["method_id"] == c[2]["method_id"] and r["sport"] == c[2]["sport"] for r in preferred),
                         # Reserve real developmental work before optional
                         # maintenance consumes its weekly room. Every choice
                         # here already passed time, Q/E, Recovery and the
@@ -4477,7 +4481,6 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         *gap_priority,
                         not c[2]["is_key_session"] if day in key_slots and slot_index == first_plannable_slot(day) else False,
                         bool(allowance.get("mode") in {"POST_TARGET_MAINTENANCE", "PLANNED_EASY_MAINTENANCE"} or extra_taper),
-                        bool(preferred) and not any(r["method_id"] == c[2]["method_id"] and r["sport"] == c[2]["sport"] for r in preferred),
                         c[2]["direct_equivalent_minutes"]["Z1"] if gap_priority and c[2]["zone"] != "Z1" else 0.,
                         not (c[2]["zone"] == "Z1" and c[2]["purpose"] != "RECOVERY"
                              and choice_methods[(c[2]["sport"], c[2]["method_id"])]["structure"] in {"CONTINUOUS", "TWO_REPETITIONS"})
@@ -4524,9 +4527,6 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     protected_q, protected_e = bundle["protected_q"], bundle["protected_e"]
                     protected_components = bundle["components"]
                     def balanced_fit(parts):
-                        if (development_due and planning_development.is_developmental(session)
-                            and not planning_development.is_developmental({**session, "blocks": parts})):
-                            return False
                         if not choice_checks[(session["sport"], session["method_id"])](parts):
                             return False
                         if protected_components:
