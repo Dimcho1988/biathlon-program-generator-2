@@ -3642,6 +3642,11 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     overhead = sum(m["warmup_min"] + m["cooldown_min"] + m.get("recovery_min",0.) for m in (method,other))
                 limits = [{"code": "METHOD_WORK_CAP", "limit_minutes": method["max_work_min"]},
                           {"code": "TECHNICAL_SESSION_CEILING" if availability_mode == "AUTO_HISTORY" else "DAILY_AVAILABLE_WORK", "limit_minutes": max(0., day_available - overhead)}]
+                if method["structure"] == "STRENGTH_CIRCUIT" and not method.get("strength_profile"):
+                    # Legacy circuits have indivisible three-minute work units.
+                    # Frequency must not round a reduced Recovery dose upward
+                    # to another full circuit; rest/transitions are charged later.
+                    limits.append({"code": "STRENGTH_ROLE_RECOVERY_BUDGET", "limit_minutes": requested})
                 allocation_policy = profile.get("_allocation_policy") or {}
                 search_cap = allocation_policy.get("easy_caps", {}).get(day.isoformat())
                 if search_cap is not None and z in allocation_policy.get("easy_cap_zones", ["Z1", "Z2"]):
