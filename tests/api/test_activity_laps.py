@@ -64,6 +64,15 @@ def test_optional_file_failure_keeps_regular_activity_available(status, expected
     assert load_device_laps(Client(), DETAIL)["status"] == expected
 
 
+@pytest.mark.parametrize("data", [gzip.compress(b"original-fit")[:-8],
+                                   b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff\x07"])
+def test_malformed_gzip_does_not_abort_activity_refresh(data):
+    class Client:
+        def get_activity_file_result(self, activity_id):
+            return IntervalsResponse(200, data)
+    assert load_device_laps(Client(), DETAIL)["status"] == "retry"
+
+
 def test_icu_intervals_keep_explicit_times_and_do_not_treat_indices_as_seconds():
     detail = {**DETAIL, "type": "Run", "icu_intervals": [
         {"start_index": 100, "end_index": 103, "start_time": 200, "end_time": 206,

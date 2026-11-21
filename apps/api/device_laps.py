@@ -12,6 +12,7 @@ import json
 import math
 import warnings
 import xml.etree.ElementTree as ET
+import zlib
 
 VERSION = "device-laps-v1"
 MAX_FILE_BYTES = 32 * 1024 * 1024
@@ -144,7 +145,7 @@ def load_device_laps(client, detail, previous=()):
         # Optional original-file access cannot break an otherwise valid refresh.
         # Retry transient failures on the next refresh; cache denied/missing files.
         return {**bundle, "status": "unavailable" if exc.status_code in {403, 404, 410} else "retry"}
-    except (ValueError, TypeError, KeyError, OSError, ET.ParseError):
+    except (ValueError, TypeError, KeyError, OSError, EOFError, zlib.error, ET.ParseError):
         return {**bundle, "status": "retry"}
     except Exception as exc:
         # Malformed FIT messages raise decoder-specific exceptions. Do not expose
