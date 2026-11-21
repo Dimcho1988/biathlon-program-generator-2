@@ -22,7 +22,13 @@ def is_nordic(sport):
         "nordicski", "rollerski", "rollerskiing", "crosscountryskiing", "crosscountryski", "skating"}
 
 
+def is_snow_ski(sport):
+    return sport_key(sport) in {"nordicski", "crosscountryskiing", "crosscountryski"}
+
+
 def speed_model_versions(sport):
+    if is_snow_ski(sport):
+        return core.MODEL_VERSION, "vflat_b65_config_v9_ski_distance_input"
     model = treadmill if is_treadmill(sport) else running if is_running(sport) else cycling if is_cycling(sport) else core
     return model.MODEL_VERSION, model.CONFIG_VERSION
 

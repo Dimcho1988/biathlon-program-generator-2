@@ -73,14 +73,15 @@ def test_index_version_invalidates_cache_and_comparison_key(monkeypatch):
     assert activity_shadow_configuration_fingerprint(**kwargs) != current_comparison
 
 
-def test_running_configuration_changes_cache_and_comparison_without_changing_ski():
+def test_sport_specific_input_and_terrain_policies_have_distinct_comparison_keys():
     from vflat_b65.sports import speed_model_versions
     kwargs=dict(zone_bounds_bpm=(124,144,164,182,190,205),explicit_hrmax_bpm=205)
     legacy=activity_shadow_configuration_fingerprint(**kwargs)
     old=activity_shadow_configuration_fingerprint(**kwargs, hrmod_model_version="hrmod_mirror_area_shift_v9")
     assert old != "90b536d21b57b9d0b86f9dfc29451b856b3c9b50f53d7c93c31a47b10faebe3b"  # Old speed/TI fingerprint cannot be reused.
     assert legacy != old
-    assert activity_shadow_configuration_fingerprint(**kwargs,sport="NordicSki")==legacy
+    assert activity_shadow_configuration_fingerprint(**kwargs,sport="NordicSki") != legacy
+    assert activity_shadow_configuration_fingerprint(**kwargs,sport="RollerSki") == legacy
     run=activity_shadow_configuration_fingerprint(**kwargs,sport="Run")
     assert run!=legacy
     assert activity_shadow_configuration_fingerprint(**kwargs,sport="TrailRun")==run
@@ -403,3 +404,59 @@ def test_segment_speed_uses_independent_intervals_and_splits_fractional_boundary
     assert result[0]['vflat_b65_kmh']==pytest.approx(70/3)
     assert result[1]['speed_comparison_seconds']==.5
     assert result[1]['speed_raw_kmh']==20 and result[1]['vflat_b65_kmh']==30
+
+
+def test_snow_ski_uses_distance_inside_active_intervals_and_keeps_recorded_hr_inputs():
+    from apps.api.activity_shadow_pipeline import _model_inputs
+
+    offsets = [0, 2, 4, 6, 60, 62, 64, 66]
+    distance = [0, 12, 24, 36, 50, 58, 66, 74]
+    source = normalize_stream_intervals(NormalizerInput(offsets=offsets, metrics={
+        "distance": distance, "velocity_smooth": [5.] * 8, "gradient": [0.] * 8,
+    }))
+    detail = {"type": "NordicSki", "distance": 74., "start_date": "2026-11-01T10:00:00Z"}
+    _, refs, frame = _model_inputs(detail, source)
+    assert frame.speed_raw_mps.tolist() == [5.] + [6.] * 6 + [5.] + [4.] * 6
+    assert frame.attrs["speed_input"]["distance_seconds"] == 12.
+    assert all(row.speed_mps == 5. for row in refs.samples)
+    assert all(row["speed_raw_kmh"] == 18. for row in build_immutable_activity_input(detail, source)["samples"])
+    _, actual = compute_activity_shadow(detail=detail, normalized=source,
+        zone_bounds_bpm=(50, 137, 147, 158, 170, 178), explicit_hrmax_bpm=178)
+    assert actual["speed_comparison"]["mean_raw_kmh"] == pytest.approx(18.)
+    assert actual["diagnostics"]["vflat"]["speed_input"] == frame.attrs["speed_input"]
+    assert [r["speed_raw_kmh"] for r in actual["speed_test_series"] if r["dt_s"]] == pytest.approx([21.6]*6+[14.4]*6)
+    for other in ("RollerSki", "Run", "Ride"):
+        _, _, untouched = _model_inputs({**detail, "type": other}, source)
+        assert untouched.speed_raw_mps.tolist() == [5.] * len(frame)
+        assert "speed_input" not in untouched.attrs
+
+
+@pytest.mark.parametrize("distance,total,expected", [
+    ([0., 4., 8., 12.], None, [2.] * 4),
+    ([0., 4., 8., 12.], 50., [2.] * 4),
+    ([0., 4., 1., 12.], 12., [2.] * 4),
+    ([0., 4., 48., 52.], 52., [2.] * 4),
+    ([0., None, 8., 12.], 12., [2., 2., 2., 4.]),
+    ([0., 4., 4., 8.], 8., [2., 4., 0., 4.]),
+])
+def test_ski_distance_counter_fallback(distance, total, expected):
+    from apps.api.activity_shadow_pipeline import _model_inputs
+
+    source = normalize_stream_intervals(NormalizerInput(offsets=list(range(4)),
+        metrics={"distance": distance, "velocity_smooth": [2.] * 4}))
+    _, _, frame = _model_inputs({"type": "NordicSki", "distance": total, "start_date": "2026-11-01T10:00:00Z"}, source)
+    assert frame.speed_raw_mps.tolist() == expected
+
+
+def test_ski_rejects_stair_step_distance_and_respects_fractional_seconds():
+    import numpy as np
+    from vflat_b65.nordic_speed import prepare_speed
+
+    offsets = np.arange(30) / 2.
+    distance = (np.arange(30) // 2) * 4.
+    speed, diagnostics = prepare_speed(offsets, distance, np.full(30, 4.), [(0, 30)], distance[-1])
+    assert np.all(speed == 4.)
+    assert diagnostics["provider_seconds"] == 14.5
+    speed, diagnostics = prepare_speed(offsets, offsets * 6., np.full(30, 4.), [(0, 30)], offsets[-1] * 6.)
+    assert np.all(speed[1:] == 6.)
+    assert diagnostics["distance_seconds"] == 14.5
