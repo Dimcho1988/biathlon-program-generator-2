@@ -520,7 +520,7 @@ def test_protein_energy_rule_boundaries_conservation_and_no_training_switch(ener
         assert t["protein_g_per_kg"] == pytest.approx(coefficient)
         assert t["energy_kcal_per_kg"] == energy
         assert t["carbohydrate_g"] * 4 + t["fat_g"] * 9 + t["protein_g"] * 4 == pytest.approx(energy * 67)
-        assert t["carbohydrate_g"] * 4 / (t["fat_g"] * 9) == pytest.approx(2/3)
+        assert t["fat_g"] * 9 / t["kcal"] == pytest.approx(.25)
 
 
 def test_partial_targets_only_protein_and_missing_weight_or_minor_stay_absent():

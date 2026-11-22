@@ -91,6 +91,8 @@ export type EnergyDay = {
     correction_factor: number;
     correction_kcal: number | null;
     nonprotein_carbohydrate_fraction: number | null;
+    fat_energy_fraction?: number | null;
+    race_loading?: boolean;
     weight_kg: number | null;
     history: (Energy & { day: string })[];
     notes: string[];
@@ -106,6 +108,14 @@ export type EnergyDay = {
     fat_g: number | null;
     allocation_note: string;
   } | null;
+  base_targets?: EnergyDay["targets"];
+};
+export type RacePreparation = {
+  event_id: string; event_name: string; race_date: string; preview_hash: string;
+  status: "PENDING" | "ACCEPTED" | "DECLINED"; revision: number;
+  can_accept: boolean; reason: string | null; late: boolean;
+  days: { day: string; base_targets: NonNullable<EnergyDay["targets"]>;
+    targets: NonNullable<EnergyDay["targets"]>; weight_kg: number }[];
 };
 export type EnergyHistory = {
   schema_version: string;
@@ -114,6 +124,7 @@ export type EnergyHistory = {
   today: string;
   tomorrow?: string;
   nutrition_version?: string;
+  race_preparation?: RacePreparation[];
   timezone: string;
   profile: NutritionProfile | null;
   profile_revision: number;

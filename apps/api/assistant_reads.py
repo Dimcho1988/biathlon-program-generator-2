@@ -429,6 +429,8 @@ def read(repository, alias, access, query, settings, today, parse_date, *, actor
         parameters = _parameters(q, today + timedelta(days=1), parse_date)
         parameters.pop("sport", None)
         payload = _prepared(repository, alias, "energy", parameters)
+        if access.get("can_view_plan") is not True:
+            payload = {k: v for k, v in payload.items() if k != "race_preparation"}
         if not query.get("section") and isinstance(payload.get("days"), list):
             # The menu needs daily totals and targets, not hundreds of chart bins.
             # Explicit section reads still expose the identical saved full report.

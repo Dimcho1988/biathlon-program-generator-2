@@ -3,6 +3,7 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { EnergyDay, EnergyHistory } from "../lib/energy";
+import { RaceNutrition } from "./race-nutrition";
 const macros = [
   ["carbohydrate", "Въглехидрати", "#159b8d", 4],
   ["fat", "Мазнини", "#cc8a30", 9],
@@ -120,6 +121,7 @@ export function EnergyDashboard({ data, canEdit }: { data: EnergyHistory; canEdi
   const max = Math.max(1, ...data.days.map(quantity));
   const legend = view === "energy" ? sources : fuel ? macros.slice(0, 2) : macros;
   return <>
+    <RaceNutrition proposals={data.race_preparation ?? []} canEdit={canEdit} />
     <section className="energy-panel">
       <form method="get" className="energy-period">
         <label>От<input type="date" name="start" required defaultValue={data.period_start} /></label>
@@ -176,6 +178,7 @@ export function EnergyDashboard({ data, canEdit }: { data: EnergyHistory; canEdi
         <p className="energy-caption">Тренировките включват разхода в покой за същото време. Той е изключен от останалите две стойности, така че няма двойно броене.</p></>}
         {day.reason && <p className="energy-notice">{day.reason}</p>}
         <h3>{day.day === data.tomorrow ? "Хранителна цел за утре" : "Хранителни цели"}</h3>
+        {day.nutrition_basis?.race_loading && <p className="energy-notice">Прието въглехидратно зареждане за този ден. Обичайна цел: {n(day.base_targets?.kcal)} kcal.</p>}
         {day.targets?.kcal != null && <div className="energy-total"><span>Препоръчителен прием</span>
           <strong>{n(day.targets.kcal)} <small>kcal</small></strong></div>}
         {day.nutrition_basis && <>

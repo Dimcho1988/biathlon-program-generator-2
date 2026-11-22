@@ -8,7 +8,7 @@ from datetime import timedelta
 
 from . import energy_model as model
 
-VERSION = "nutrition-seven-day-quarter-v1"
+VERSION = "nutrition-fixed-fat-race-loading-v2"
 CORRECTION = 0.25
 
 MENU_GUIDANCE = """За меню прочети energy за датата на препоръката (date), включително утре.
@@ -23,7 +23,18 @@ MENU_GUIDANCE = """За меню прочети energy за датата на п
 Ако targets.kcal липсва, не задавай количествена калорийна или въглехидратна/мастна цел.
 Разграничавай оценени окислени субстрати от хранителен прием; това е предложена цел,
 не отчетена храна, измерен дефицит или доказан енергиен баланс. Коефициентът 0,25
-и разпределението по средното окисление са работни допускания, не доказана точност.
+и изборът на 25% мазнини са работни допускания, не доказана индивидуална точност.
+Базовите мазнини са 25% от целевите kcal, белтъчините следват модела 1,6–1,9 g/kg,
+а въглехидратите са остатъкът. Окислените субстрати не определят това разпределение.
+Прочети race_preparation: предложенията за зареждане са отделни от базовата цел.
+При PENDING обясни датите и разликата и насочи към /energy#race-preparation за
+приемане или отказ. Не твърди, че си приел предложение чрез чата. Само ACCEPTED
+променя целите за посочените дни; след тях автоматично важи базовият режим.
+Използвай одобрените targets и base_targets за сравнение. За ден извън days
+използвай съответния race_preparation[].days[].targets само ако е ACCEPTED.
+10 g/kg е начална цел от диапазона 10–12 g/kg/ден за 36–48 h преди продължителен
+старт над 90 min. Проверявай поносимостта; разпредели приема в познати храни,
+напитки и малки хранения, с по-малко фибри непосредствено преди старта.
 Не добавяй тренировъчните калории втори път към целта и не въвеждай автоматичен дефицит.
 Провери nutrition_basis.food_preferences за датираните алергии, непоносимости и предпочитания.
 Не питай повторно за вече посоченото; при неуточнени алергии попитай преди лично меню.
@@ -61,17 +72,14 @@ def recommend(day, today, days, profile):
     difference = previous["kcal"] - mean if previous else None
     correction = CORRECTION * difference if difference is not None else 0.0
     kcal = mean + correction if mean is not None else None
-    carbohydrate = sum(r["carbohydrate_kcal"] for r in used)
-    fat = sum(r["fat_kcal"] for r in used)
-    fraction = carbohydrate / (carbohydrate + fat) if carbohydrate + fat > 0 else 0.5
     weight = profile.get("weight_kg")
     adult = bool(profile.get("birth_year") and day.year - profile["birth_year"] - 1 >= 18)
-    targets = model.dietary_targets(kcal, weight, 0, adult, fraction)
+    targets = model.dietary_targets(kcal, weight, 0, adult)
     if targets:
         targets["protein_basis"] = "SEVEN_DAY_ENERGY_RULE" if kcal is not None else "INCOMPLETE_DAY_FALLBACK"
         targets["allocation_note"] = (
             "Цел за прием: среден дневен разход за предходните 7 завършени дни плюс 25% от отклонението на последния ден. "
-            "Белтъчини: 1,6–1,9 g/kg според целевите kcal/kg. Останалата енергия следва средното оценено съотношение въглехидрати/мазнини. "
+            "Белтъчини: 1,6–1,9 g/kg според целевите kcal/kg. Мазнини: 25% от целевите kcal; въглехидрати: остатъкът. "
             "Работна препоръка, без индивидуална валидация; не отчита автоматично предстоящата тренировка."
             if kcal is not None else
             "Няма завършени дни с пълна оценка в предходния седемдневен период. Резервна белтъчна цел 1,8 g/kg."
@@ -94,7 +102,8 @@ def recommend(day, today, days, profile):
         "deviation_percent": 100 * difference / mean if difference is not None and mean else None,
         "correction_factor": CORRECTION,
         "correction_kcal": correction if mean is not None else None,
-        "nonprotein_carbohydrate_fraction": fraction if used else None,
+        "nonprotein_carbohydrate_fraction": None,
+        "fat_energy_fraction": 0.25 if used else None,
         "weight_kg": weight, "history": used, "notes": notes,
         "food_preferences": {k: profile.get(k, "") for k in ("preferences", "allergies")},
     }
