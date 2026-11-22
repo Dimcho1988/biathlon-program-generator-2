@@ -9,6 +9,7 @@ from .response_monitoring import InputModel
 from .response_service import ResponseStore
 from . import energy_model as model
 from . import nutrition_recommendations as nutrition
+from . import race_nutrition
 
 
 class NutritionProfile(InputModel):
@@ -30,7 +31,7 @@ class NutritionProfile(InputModel):
 
 def profile_entries(entries):
     return sorted(
-        (r for r in entries if r["kind"] == "NUTRITION"),
+        (r for r in entries if r["kind"] == "NUTRITION" and not race_nutrition.is_decision(r)),
         key=lambda r: r["observed_date"],
     )
 
@@ -428,6 +429,11 @@ def history(repository, alias, start=None, end=None, now=None):
         d["targets"], d["nutrition_basis"] = nutrition.recommend(
             day, today, days, resolved_profile(entries, wellness, imported, day)
         )
+    race_calendar = race_nutrition.events(repository, alias)
+    race_preparation = race_nutrition.proposals(race_calendar, entries, today,
+        lambda day: nutrition.recommend(day, today, days,
+            resolved_profile(entries, wellness, imported, day))) if end >= today else []
+    race_nutrition.apply_accepted(visible_days, entries, race_calendar, today)
     latest = profile_on(entries, end)
     profile = resolved_profile(entries, wellness, imported, end)
     missing = [k for k in ("sex", "weight_kg", "birth_year") if not profile.get(k)]
@@ -436,6 +442,7 @@ def history(repository, alias, start=None, end=None, now=None):
     return {
         "menu_guidance": nutrition.MENU_GUIDANCE,
         "nutrition_version": nutrition.VERSION,
+        "race_preparation": race_preparation,
         "schema_version": model.VERSION,
         "calculation_version": model.CALCULATION_VERSION,
         "period_start": str(start),
@@ -472,9 +479,11 @@ def history(repository, alias, start=None, end=None, now=None):
             "Грамовете са енергийни еквиваленти (4/9/4 kcal/g), не измерена загуба на тъкани. Хранителният прием се препоръчва отделно.",
             "Дневният разход предполага, че всички активности са записани. Хранителната цел е отделна прогноза от предходните 7 завършени дни: среден разход плюс 25% от положителното или отрицателното отклонение на последния ден. Текущите частични данни не участват. За утре целта е предварителна до приключване на днешния ден.",
             "При липсващи дни се използват наличните пълни дни в същия седемдневен период, без нулево попълване. При липса на пълен последен ден няма корекция. Коефициентът 0,25 не гарантира точност и не е физиологично валидиран. Бъдещата тренировъчна програма не променя автоматично тази цел.",
-            "Хранителни белтъчини: 1,6 g/kg до 40 целеви kcal/kg; линейно до 1,9 g/kg при 80 kcal/kg; над това 1,9 g/kg. Без завършена история — резервни 1,8 g/kg. Това е работно правило. След белтъчините останалата енергия следва съотношението от сумарните въглехидратни и мастни kcal за използваните дни, не средното на дневните проценти.",
+            "Хранителни белтъчини: 1,6 g/kg до 40 целеви kcal/kg; линейно до 1,9 g/kg при 80 kcal/kg; над това 1,9 g/kg. Без завършена история — резервни 1,8 g/kg. Мазнини: 25% от целевите kcal. Въглехидрати: остатъкът. Това са работни правила, отделни от оцененото окисление.",
+            "Преди старт над 90 min може да се предложи зареждане за предходните два дни. Начална цел 10 g/kg от препоръчителните 10–12 g/kg/ден за 36–48 h (Thomas, Erdman и Burke, 2016). Временният дял 20–25% мазнини е избор на приложението. Приемането запазва конкретните цели само за показаните дни; отказът, преместен или отменен старт не активира зареждане.",
         ],
         "references": [
+            race_nutrition.REFERENCE,
             "https://pmc.ncbi.nlm.nih.gov/articles/PMC6839090/",
             "https://pubmed.ncbi.nlm.nih.gov/21660838/",
             "https://pubmed.ncbi.nlm.nih.gov/40135445/",

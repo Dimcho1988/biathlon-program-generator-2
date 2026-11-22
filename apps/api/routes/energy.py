@@ -4,11 +4,39 @@ from datetime import date
 from typing import Annotated
 from uuid import UUID
 from fastapi import APIRouter, Header, HTTPException
-from .. import dependencies, energy_service
+from .. import dependencies, energy_service, race_nutrition
 from ..prepared_views import endpoint
 from ..oauth_store import PersistentStoreFailure
 
 router = APIRouter()
+
+
+@router.get("/api/v2/athlete/energy/race-reminders")
+def race_reminders(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+):
+    alias = scope(authorization, athlete_alias)
+    try:
+        return race_nutrition.reminders(dependencies.repository(), alias)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Nutrition reminders unavailable") from exc
+
+
+@router.put("/api/v2/athlete/energy/race-loading")
+def save_race_loading(
+    body: race_nutrition.Decision,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+    actor: Annotated[UUID | None, Header(alias="X-OnFlows-Actor-Id")] = None,
+):
+    alias = scope(authorization, athlete_alias)
+    if actor is None:
+        raise HTTPException(401, "Actor session is required")
+    try:
+        return race_nutrition.save_decision(dependencies.repository(), alias, body, actor)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Nutrition decision unavailable") from exc
 
 
 def scope(authorization, athlete_alias):

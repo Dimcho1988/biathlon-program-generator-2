@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useRef, useState, useTransition, type ReactNode } from "react";
 import { ThemeToggle } from "./theme-toggle";
 import { InstallApp } from "./install-app";
+import { NutritionReminder } from "./race-nutrition";
 import { rememberedNavigationHref } from "../lib/dashboard-navigation";
 
 const mobileLabels: Record<string, string> = { "/": "Статус", "/assistant": "Асистент", "/activities": "Активности", "/trainability": "Индекс", "/management": "Програма" };
@@ -84,6 +85,7 @@ export function AppShell({ children, athlete }: { children: ReactNode; athlete: 
     {menuOpen && <button className="workspace-menu-backdrop" type="button" aria-label="Затвори навигацията" onClick={() => { closeMenu(); toggleRef.current?.focus(); }} />}
     <div id="workspace-content" className="workspace-content" tabIndex={-1} aria-busy={pending}>
       {pending && <div className="workspace-navigation-progress" role="status">Зареждаме „{destinationLabel}“…</div>}
+      <NutritionReminder key={pathname} />
       {children}
     </div>
     <nav className="mobile-navigation" aria-label="Бърза навигация">

@@ -292,21 +292,22 @@ def dietary_targets(total, weight, training_hours, adult, cho_fraction=0.65):
     per_kg = total / weight if complete else None
     coefficient = min(1.9, max(1.6, 1.6 + 0.0075 * (per_kg - 40))) if complete else 1.8
     protein = weight * coefficient
-    full = complete and total > protein * 4
-    fraction = min(1.0, max(0.0, cho_fraction))
-    remaining = total - protein * 4 if full else None
+    # Intake policy is independent of estimated fuel oxidation. Keep the old
+    # cho_fraction argument for callers, but never use it to prescribe food.
+    full = complete and total * 0.75 > protein * 4
     return {
         "kcal": total if full else None,
         "protein_g": protein,
         "protein_g_per_kg": coefficient,
         "energy_kcal_per_kg": per_kg,
         "protein_basis": "DAILY_ENERGY_RULE" if complete else "INCOMPLETE_DAY_FALLBACK",
-        "carbohydrate_g": remaining * fraction / 4 if full else None,
-        "fat_g": remaining * (1 - fraction) / 9 if full else None,
+        "carbohydrate_g": (total * 0.75 - protein * 4) / 4 if full else None,
+        "fat_g": total * 0.25 / 9 if full else None,
+        "fat_energy_fraction": 0.25 if full else None,
         "purpose": "MAINTENANCE_STARTING_ESTIMATE",
         "allocation_note": (
             "Работно правило: 1,6–1,9 g/kg при 40–80 kcal/kg общ дневен разход, с ограничение до тези граници. "
-            "Останалата енергия следва оцененото съотношение въглехидрати/мазнини. "
+            "Мазнини: 25% от целевата енергия; въглехидрати: остатъкът след белтъчините и мазнините. "
             "Това е ориентир за поддържане, не индивидуално валидирана хранителна норма."
             if complete else
             "Непълен ден: резервна цел 1,8 g/kg. Калориите, въглехидратите и мазнините за целия ден още не са определени."

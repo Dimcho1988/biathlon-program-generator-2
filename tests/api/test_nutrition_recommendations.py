@@ -36,14 +36,15 @@ def test_quarter_is_symmetric_and_uses_expenditure_not_previous_targets(last, ta
     assert days == before
 
 
-def test_distribution_uses_summed_energy_not_mean_of_percentages():
+def test_intake_fat_is_fixed_independently_of_oxidation():
     days = {
         "2026-11-18": {"total": m.grams(m.allocate(1000, .2, 0))},
         "2026-11-19": {"total": m.grams(m.allocate(3000, .8, 0))},
     }
     targets, basis = n.recommend(DAY, DAY, days, PROFILE)
-    assert basis["nonprotein_carbohydrate_fraction"] == pytest.approx(.65)
-    assert targets["carbohydrate_g"]*4 / (targets["kcal"]-targets["protein_g"]*4) == pytest.approx(.65)
+    assert basis["nonprotein_carbohydrate_fraction"] is None
+    assert targets["fat_g"] * 9 == pytest.approx(targets["kcal"] * .25)
+    assert targets["carbohydrate_g"] * 4 == pytest.approx(targets["kcal"] * .75 - targets["protein_g"] * 4)
 
 
 def test_missing_days_are_not_zero_and_missing_last_day_is_not_an_older_donor():
