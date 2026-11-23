@@ -763,6 +763,14 @@ class OpenAIAssistantProvider:
 
         # Task-specific guidance does not consume unrelated plan/input budgets.
         current_text = str(messages[-1].get("content", "")).lower() if messages else ""
+        if context.get("answer_focus") == "nutrition":
+            payload["instructions"] += (
+                " Текущото искане е за хранене. Отговори с хранителните цели и поисканото меню; "
+                "използвай плана само за храненето около заниманията, без описание на изпълнението им. "
+                "Чети energy с date за избрания ден. Корекция като „Храненето, а не програмата“ "
+                "запазва вече уточнената дата. Наличните алергии и предпочитания в разговора важат; "
+                "не ги питай повторно. При липсващи цели назови това и дай общ хранителен ориентир."
+            )
         if any(q.get("kind") == "activities" for q in queries) or re.search(r"активност|състез|контролно|часовник|изпълнен", current_text):
             payload["instructions"] += _ACTIVITY_INSTRUCTIONS
         if ((context.get("active_input_request") or {}).get("kind") in {"SPEED_TEST", "MANUAL_SPEED_TEST"}

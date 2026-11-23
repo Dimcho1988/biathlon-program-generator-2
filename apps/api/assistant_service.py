@@ -14,6 +14,7 @@ from fastapi import HTTPException
 
 from .oauth_store import PersistentStoreFailure
 from . import assistant_commands, assistant_context
+from . import assistant_nutrition
 from .request_metrics import timed_stage
 from .assistant_provider import AssistantProviderError, DisabledAssistantProvider, get_assistant_provider
 from .assistant_presentation import (
@@ -144,7 +145,7 @@ def _sources(context):
         "history":"История на изпълненото натоварване", "inputs":"Актуални входни данни",
         "settings":"Настройки на профила", "activities":"Записани активности", "activity":"Анализ на избраната активност",
         "speed":"Скоростен модел и тестове", "trainability":"Индекс на тренираност", "learning":"Резултати от самообучението",
-        "response":"Наблюдения и оценки", "management":"Управление на тренировъчната програма",
+        "response":"Наблюдения и оценки", "energy":"Хранителни цели и енергоразход", "management":"Управление на тренировъчната програма",
         "navigation":"Функции на приложението"}
     metadata=context.get("generation_metadata") or {}
     label="Сценарна оценка на onFlows" if context.get("source")=="CANONICAL_WHAT_IF_PREVIEW" else labels.get(kind,"Данни на onFlows")
@@ -658,7 +659,7 @@ def _input_request(state, message, now):
         # An unrelated read/question ends the write thread. A short answer,
         # date, name, number, or corrected scale can complete its missing fields.
         related = pending.get("kind")=="SESSION" and re.search(r"rpe|усили|скал|оценк|състояни|след.{0,30}трениров|стрес и възстанов|(?:от|до)\s*10", text)
-        if ((not related and _read_request(message))
+        if ((not related and (_read_request(message) or assistant_nutrition.is_nutrition_request(message)))
                 or text.strip() in CANCEL or pending.get("followups", 0) >= 8):
             pending = None
         else:
@@ -829,6 +830,12 @@ def _fallback_day_query(repository, alias, message):
 
 def _fallback(repository,alias,actor,message):
     normalized=message.lower().strip()
+    if assistant_nutrition.is_nutrition_request(message):
+        requested,clarification=_fallback_day_query(repository,alias,message)
+        if requested is None:
+            return clarification.replace("програмата", "хранителната цел"),None
+        context=_read(repository,alias,actor,{**requested,"kind":"energy"})
+        return assistant_nutrition.render_targets([context]),context
     if re.search(r"(още|добави).{0,25}(отсеч|интервал|повторени)",normalized):
         return UNAVAILABLE_SESSION_CHANGE, None
     if any(word in normalized for word in ["умор", "умора"]):
@@ -894,6 +901,7 @@ def turn(repository,alias,actor,body,provider=None):
     if not isinstance(message,str) or not message.strip() or len(message)>4000:
         raise HTTPException(422,"Въведи съобщение до 4000 знака.")
     message=message.strip()
+    nutrition_turn=assistant_nutrition.is_nutrition_request(message) and not _explicit_write_request(message)
     operation=_uuid(body.get("operation_id"))
     conversation=_uuid(body["conversation_id"]) if body.get("conversation_id") else None
     start=_rpc(repository,"BEGIN",alias,actor,conversation,operation,{"message":message})
@@ -1036,7 +1044,7 @@ def turn(repository,alias,actor,body,provider=None):
             for step in range(4):
                 timeout=getattr(getattr(provider,"config",None),"timeout_seconds",20)
                 if step and monotonic()-started+timeout+5>90:
-                    result["message"]=_resolved_answer(contexts,input_request)
+                    result["message"]=_resolved_answer(contexts,input_request,nutrition=nutrition_turn)
                     break
                 synthesis_only=step==3
                 capabilities=_capabilities(_permissions(repository,alias,actor))
@@ -1048,7 +1056,8 @@ def turn(repository,alias,actor,body,provider=None):
                 if synthesis_only:
                     capabilities={**capabilities,"read":[],"write":[kind for kind in capabilities["write"] if kind in read_input_kinds] if final_command_allowed else []}
                 model_context={"results":contexts,"confirmed_context":state.get("preferences",[]),
-                    "read_only_turn":not input_request and _read_request(message),
+                    "read_only_turn":not input_request and (_read_request(message) or nutrition_turn),
+                    "answer_focus":"nutrition" if nutrition_turn else None,
                     "completed_queries":completed_queries,"remaining_model_calls":4-step,"remaining_read_calls":max(0,3-step),
                     "query_feedback":query_feedback,
                     "final_answer_only":synthesis_only and not final_command_allowed,"final_command_allowed":final_command_allowed,
@@ -1096,7 +1105,7 @@ def turn(repository,alias,actor,body,provider=None):
                     value=reply.get("usage",{}).get(key,0)
                     totals[key]=None if key=="estimated_cost_usd" and (totals[key] is None or value is None) else totals[key]+(value or 0)
                 if synthesis_only and (reply.get("query") or reply.get("command") and not final_command_allowed):
-                    result["message"]=_resolved_answer(contexts,input_request)
+                    result["message"]=_resolved_answer(contexts,input_request,nutrition=nutrition_turn)
                     break
                 if reply.get("query"):
                     requested=reply["query"]
@@ -1116,6 +1125,8 @@ def turn(repository,alias,actor,body,provider=None):
                             "instruction":"Use the completed result. Read another needed domain if a read slot remains; otherwise answer."}
                         continue
                     context=_read(repository,alias,actor,requested,reads=reads)
+                    if nutrition_turn and not input_request:
+                        context=assistant_nutrition.compact_context(context)
                     query_feedback=None
                     # These are separate app forms within the same planning
                     # intent. A canonical input read resolves the form without
@@ -1185,13 +1196,13 @@ def turn(repository,alias,actor,body,provider=None):
                             "expires_at":(now+timedelta(minutes=15)).isoformat()}
                 break
             else:
-                result["message"]=_resolved_answer(contexts,input_request)
+                result["message"]=_resolved_answer(contexts,input_request,nutrition=nutrition_turn)
             result["usage"]=totals
         result["sources"]=[source for item in (contexts or [context]) for source in _sources(item)]
         # One in-app prompt per local day, only after a plan read. The current
         # observation is checked first; no background model loop is involved.
         now=datetime.now(timezone.utc)
-        if (context and context.get("query_kind")=="day" and _provider_available(provider) and permissions.get("is_owner")
+        if (not nutrition_turn and context and context.get("query_kind")=="day" and _provider_available(provider) and permissions.get("is_owner")
             and permissions.get("can_view_recovery") and state.get("nudges_enabled",True)
             and not state.get("pending_command") and not result.get("receipt")):
             local=now.astimezone(ZoneInfo(context.get("timezone","UTC")))
@@ -1228,7 +1239,9 @@ def turn(repository,alias,actor,body,provider=None):
             renderable=not input_request and any(item.get("query_kind")=="status" or
                 item.get("query_kind")=="history" and item.get("report") or
                 item.get("query_kind") in {"day","method"} and "sessions" in item and "date" in item for item in available)
-            if renderable:
+            if nutrition_turn and not input_request:
+                result["message"]=assistant_nutrition.render_targets(available)
+            elif renderable:
                 result["message"]=_resolved_answer(available)+"\n\nПодробното обяснение от ИИ не е добавено, защото общият контекст е твърде обемен. По-горе е наличната справка от приложението."
             elif available and write_requested:
                 result["message"]="Не успях да завърша промяната заради прекалено обемна справка. Няма потвърден нов запис. Искането и уточненията са запазени в разговора; можеш да кажеш „Продължи“, без да ги въвеждаш отново."
