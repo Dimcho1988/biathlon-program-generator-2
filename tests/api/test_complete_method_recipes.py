@@ -216,6 +216,9 @@ def test_coach_cards_use_the_engine_for_personal_speed_hr_and_time():
     from apps.api.method_library_service import _coach_previews
     from biathlon import method_registry
     p=athlete();v=complete_view()
+    # Native continuous previews also require a current HR-speed index. Short
+    # interval variants are no longer enabled implicitly to mask missing data.
+    v["index_window"]={"last_activity_date":TODAY.isoformat()}
     cards=method_registry.catalog(p,v,phase="GENERAL_PREPARATION")
     settings=SimpleNamespace(zone_bounds_bpm=BOUNDS,hrmax_bpm=190)
     _coach_previews(cards,p,v,settings,TODAY,"GENERAL_PREPARATION")

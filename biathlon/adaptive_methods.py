@@ -5,7 +5,7 @@ accounting. Recovery remains a daily model; no intraday exponent is inferred.
 """
 from copy import deepcopy
 
-VERSION = "adaptive-methods-v7-preserved-execution-bounds"
+VERSION = "adaptive-methods-v8-explicit-structural-variants"
 
 
 def developmental(profile):
@@ -27,11 +27,14 @@ def short_variant(method):
     p.update(work_seconds=work, recovery_seconds=max(p["recovery_seconds"], 3*work),
              min_repetitions=4, max_repetitions=12, reserve_repetitions=max(2, p["reserve_repetitions"]))
     result.update(id=method["id"]+"-SHORT", title=method["title"]+" · кратък въвеждащ вариант",
+                  variation_parent_id=method.get("variation_parent_id") or method["id"],
                   min_work_min=4*work/60, max_work_min=12*work/60,
-                  developmental_variant=True)
+                  developmental_variant=True, automatic_selection=False,
+                  requires_coach_activation=True)
     result["execution_limits"] = {"min_work_min": 4*work/60, "max_work_min": 12*work/60,
                                   "min_repetitions": 4, "max_repetitions": 12}
-    result.pop("_resolved_dose_key", None)
+    for key in ("_resolved_dose_key", "authored_interval_bounds", "source_work_minutes"):
+        result.pop(key, None)
     result["instructions"] = ("Контролирани кратки повторения, без отказ; поне 2 в резерв. Пълна почивка. "
         "Спри при болка или загуба на техника. Не гони пулса. "
         "Кратките отсечки не гарантират нисък лактат.")
@@ -53,6 +56,7 @@ def mixed_variants(methods):
             child = deepcopy(m)
             child.update(id=m["id"]+"-MIX-"+variant, variation_parent_id=m["id"], title=f"Лека аеробна работа + {m['zone']} · "+("равномерна част" if variant == "STEADY" else "отсечки"),
                          purpose="SUPPORTING", mixed_component=True, mixed_variant=variant,
+                         automatic_selection=False, requires_coach_activation=True,
                          warmup_min=15., cooldown_min=5.,
                          periods=tuple(p for p in m["periods"] if p not in {"RE_ENTRY", "TRANSITION"}))
             if m["zone"] in {"Z2", "Z3"}:

@@ -249,6 +249,7 @@ def rule_versions():
         "engine": training_plan_engine.VERSION,
         "parameters": training_plan_engine.PARAMETER_VERSION,
         "methods": training_plan_engine.METHODS_VERSION,
+        "method_structure": training_plan_engine.method_dosing.STRUCTURE_VERSION,
         "method_library": training_plan_engine.method_library.provenance(),
         "periodization": PERIODIZATION_VERSION,
         "speed_duration": training_plan_engine.speed_duration.VERSION,

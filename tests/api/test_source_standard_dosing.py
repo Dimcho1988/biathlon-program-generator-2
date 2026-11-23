@@ -76,10 +76,13 @@ def test_combination_uses_each_standard_then_recovery_once(monkeypatch):
     assert [sum(b['duration_min'] for b in blocks if b['kind']=='WORK' and b['combination_part']==i) for i in (1,2)]==[9,9]
     assert all(b['readiness_factor']==.9 for b in evidence['combined_budgets'])
     minimum=engine._minimum_work(combo,evidence,s)
-    assert minimum==pytest.approx(1)
+    assert minimum==pytest.approx(9)
     minimum_blocks=engine._blocks(combo,minimum,evidence,s)
-    assert [sum(b['duration_min'] for b in minimum_blocks if b['kind']=='WORK' and b['combination_part']==i) for i in (1,2)]==[1,1]
-    assert engine._minimum_dose_usage(minimum_blocks,evidence,combo['zone'])==pytest.approx(.1)
+    assert [sum(b['duration_min'] for b in minimum_blocks if b['kind']=='WORK' and b['combination_part']==i) for i in (1,2)]==[9,9]
+    assert engine._minimum_dose_usage(minimum_blocks,evidence,combo['zone'])==pytest.approx(.9)
+    limited=deepcopy(evidence)
+    limited['combined_budgets'][0]['objective_limit_work_minutes']=minimum-1
+    assert engine._blocks(combo,minimum-1,limited,s)==[]
     ceiling=engine._dose_ceiling(combo,'BUILDING',athlete(),'SPECIAL_PREPARATION',evidence,{})*evidence['readiness_dose_factor']
     assert engine._dose_fits(blocks,evidence,combo['zone'],ceiling)
     # Ten minutes exceed the nine-minute adjusted budget. The builder clips

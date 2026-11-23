@@ -81,6 +81,9 @@ def test_mixed_candidate_below_90_uses_residual_budget_and_own_readiness_rule(mo
     proven_shortage(monkeypatch)
     p = body(sessions_per_week=7, intensity_days=[(TODAY.weekday()+6)%7], accent_mode="MANUAL", accents=["Z3"], accent_index=1.5)
     methods = [m for m in resolved_methods(p) if m.get("mixed_component") and m["zone"] == "Z3"]
+    # This test checks readiness after the coach has selected the mixed
+    # structure. Residual load alone no longer enables a structural variant.
+    p["method_library"] = {"overrides": {m["id"]: {"enabled": True} for m in methods}}
     monkeypatch.setattr(engine, "resolved_methods", lambda _: deepcopy(methods))
     original = engine.recovery_v2.simulate
     def recovery(*args, **kwargs):

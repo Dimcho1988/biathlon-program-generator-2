@@ -13,7 +13,7 @@ from pathlib import Path
 from . import adaptive_methods, strength_methods
 from .method_dosing import continuous_building_fraction, continuous_maintenance_fraction
 
-VERSION = "training-methods-v15-curve-effort-anchors"
+VERSION = "training-methods-v16-explicit-structural-variants"
 VARIETY_VERSION = "onflows-bounded-method-variety-v1"
 COMMON = ("RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "COMPETITION")
 METHODS = (
@@ -121,6 +121,7 @@ def _bounded_variants(methods):
         if p.get("speed_time_duration_ratio") is not None:
             cp["speed_time_duration_ratio"] = p["speed_time_duration_ratio"] * 2
         child.update(id=parent["id"] + "-SPLIT-V1",
+            automatic_selection=False, requires_coach_activation=True,
             title=f"По-кратки повторения в {parent['zone']} с пълна активна почивка",
             min_work_min=cp["min_repetitions"] * cp["work_seconds"] / 60,
             max_work_min=cp["max_repetitions"] * cp["work_seconds"] / 60,
@@ -275,6 +276,15 @@ def resolved_methods(profile):
                    else m for m in methods if m["structure"] != "THRESHOLD_HIGH"]
     if controls and controls.get("mixed_sessions_enabled", True):
         methods.extend(adaptive_methods.mixed_variants(methods))
+    if not adaptive_methods.developmental(profile):
+        # Adults with little recorded exposure use the same explicitly
+        # activated introductory recipe. Keep its exact ID visible in the
+        # catalogue even before the exposure-dependent selection is evaluated.
+        # Add it after mixed variants so visibility does not create more
+        # transformations of an already shortened method.
+        methods.extend(adaptive_methods.short_variant(m) for m in list(methods)
+            if m["structure"] in {"MODEL_INTERVALS", "METABOLIC_INTERVALS"}
+            and not m.get("developmental_variant") and not m.get("mixed_component"))
     nms = profile.get("neuromuscular") or {}
     if nms.get("enabled"):
         for base in list(methods):

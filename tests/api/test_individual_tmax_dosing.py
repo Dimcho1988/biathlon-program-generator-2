@@ -21,7 +21,10 @@ def test_interval_uses_individual_tmax_method_coefficient_role_and_half_deficit(
     f = engine._nominal_fraction(method, role, {'building_fraction':building}, 'GENERAL_PREPARATION', evidence, {})
     expected = capacity*2.5*building*(.9 if role == 'BUILDING' else .6)
     assert capacity*f*evidence['readiness_dose_factor'] == pytest.approx(expected)
-    assert method['max_work_min'] == pytest.approx(capacity*2.5)
+    # Capacity remains an independent ceiling; it cannot expand the authored
+    # two-repeat recipe merely because the athlete could tolerate more work.
+    assert method['max_work_min'] == pytest.approx(3.)
+    assert method['interval_template']['max_repetitions'] == 2
     ceiling = engine._dose_ceiling(method, role, {'building_fraction':building}, 'GENERAL_PREPARATION', evidence, {})
     assert ceiling == pytest.approx(building*(1 if role == 'BUILDING' else .6))
     blocks = [{'kind':'WORK','zone':'Z4','duration_min':expected}]
@@ -91,7 +94,8 @@ def test_progressive_efforts_use_method_coefficient_but_minimum_stays_continuous
 
 def test_dynamic_native_methods_receive_range_preferences_before_capacity_resolution():
     from biathlon import method_registry
-    method = deepcopy(next(m for m in engine.resolved_methods({'planning_controls':{'automatic_intervals':True}})
+    method = deepcopy(next(m for m in engine.resolved_methods({'age_years': 25, 'training_experience_years': 5,
+                           'planning_controls':{'automatic_intervals':True}})
                            if m['structure'] == 'MODEL_INTERVALS'))
     method['id'] = 'ONFLOWS-RACE-RACE-Z4-V1'
     profile = {'method_library':{'overrides':{method['id']:{'speed_tolerance_fraction':.01, 'hr_tolerance_bpm':2., 'total_capacity_ratio':2.5}}}}

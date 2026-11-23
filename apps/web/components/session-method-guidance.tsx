@@ -6,6 +6,7 @@ import Link from "next/link";
 import { durationHms, durationSeconds } from "../lib/duration-format";
 import { methodAnchorLabel, methodHref, methodHrText, rangeText, type SessionMethod } from "../lib/method-library";
 import type { DraftSession, EffortAnchor } from "../lib/training-management";
+import { SessionMethodSource } from "./method-source";
 
 function FrozenAnchor({ anchor, sport }: { anchor: EffortAnchor; sport: string }) {
   const unit = useRunningSpeedUnit();
@@ -29,8 +30,24 @@ function QAccounting({ session }: { session: DraftSession }) {
 
 /** Include every component of a combined session once; old plans stay readable. */
 export function sessionMethods(session: DraftSession): SessionMethod[] {
-  const methods = [session.method_library, ...(session.method_library?.components ?? []), ...session.blocks.flatMap(block => [block.method_library, block.parent_method_card])].filter((m): m is SessionMethod => !!m && typeof m.id === "string");
-  return methods.filter((method, index) => methods.findIndex(m => m.id === method.id) === index);
+  const methods = new Map<string, SessionMethod>();
+  const visited = new Set<SessionMethod>();
+  function add(method: SessionMethod | undefined) {
+    if (!method || typeof method.id !== "string" || visited.has(method)) return;
+    visited.add(method);
+    const previous = methods.get(method.id);
+    // Preserve the frozen card's numerical resolution while recovering source
+    // fields stored only on a repeated block in older plans.
+    methods.set(method.id, previous ? { ...method, ...previous,
+      source: previous.source || method.source, original: previous.original || method.original,
+      adaptation: previous.adaptation || method.adaptation,
+      derived_from: previous.derived_from?.length ? previous.derived_from : method.derived_from,
+    } : method);
+    method.components?.forEach(add);
+  }
+  add(session.method_library);
+  for (const block of session.blocks) { add(block.method_library); add(block.parent_method_card); }
+  return [...methods.values()];
 }
 
 export function SessionMethodGuidance({ session }: { session: DraftSession }) {
@@ -42,6 +59,7 @@ export function SessionMethodGuidance({ session }: { session: DraftSession }) {
   return <section className="management-method-guidance" aria-label="Метод и инструкции">{anchor && <p><strong>Работна опора:</strong> <FrozenAnchor anchor={anchor} sport={session.sport}/></p>}<QAccounting session={session}/>{strength && <div className="management-strength-prescription"><h4>Силова програма · постоянен набор</h4><p>{strength.total_sets} работни серии · {(strength.dose_fraction * 100).toLocaleString("bg-BG", { maximumFractionDigits: 1 })}% от изграждащата доза за едно занимание</p><table><thead><tr><th>Упражнение</th><th>Серии × повторения</th><th>Основни мускулни групи</th></tr></thead><tbody>{strength.exercises.map(exercise => <tr key={exercise.id}><td>{exercise.name}</td><td>{exercise.sets} × {exercise.reps}</td><td>{exercise.muscle_groups}</td></tr>)}</tbody></table><p>{strength.reserve_definition}</p><p>{strength.continuity}</p><p>{strength.progression}</p><details><summary>Научна основа и адаптация</summary><p>Треньорска адаптация на onFlows; упражненията, резервът и комбинацията не възпроизвеждат дословно изследван протокол.</p><ul>{strength.sources.map(source => <li key={source.url}><a href={source.url} target="_blank" rel="noreferrer">{source.authors}</a></li>)}</ul></details></div>}{methods.map(method => {
     const resolution = method.resolution;
     return <div key={method.id}><h4>{method.id.startsWith("COMBO-") ? method.title : <Link href={methodHref(method.id)}>Метод {method.id}{method.title ? ` · ${method.title}` : ""} →</Link>}</h4>
+      <SessionMethodSource method={method}/>
       {method.guidance?.purpose && <p>{method.guidance.purpose}</p>}
       {resolution?.hr_reference_range_bpm && <p className="management-muted"><strong>Пулсов ориентир:</strong> {methodHrText(resolution)}</p>}
       {resolution?.anchor && <p className="management-muted"><strong>{anchor ? "Работен диапазон" : methodAnchorLabel(resolution.anchor)}</strong>{resolution.target_speed_range_kmh ? ` · ${speedRangeText(resolution.target_speed_range_kmh, unit, session.sport)} · ${speedBasisLabel(resolution)}` : ""}{resolution.work_duration_range_seconds ? ` · отсечка ${rangeText(resolution.work_duration_range_seconds, durationSeconds)}` : ""}</p>}

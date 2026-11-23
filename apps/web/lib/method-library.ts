@@ -50,6 +50,8 @@ export interface SessionMethod {
   id: string; title?: string; source?: LibraryMethod["source"]; original?: LibraryMethod["original"];
   adaptation?: LibraryMethod["adaptation"]; guidance?: MethodGuidance; prescription?: MethodPrescription | null;
   resolution?: MethodResolution; components?: SessionMethod[];
+  derived_from?: string[];
+  personal_variant?: { base_method_id: string; scope?: string; validation_version?: string };
   dosing_ref?: "dose_evidence.dosing";
 }
 export interface MethodLibraryResponse {
@@ -170,6 +172,7 @@ export function methodReasonText(reason?: string): string {
     SPORT_OR_PERIOD_NOT_SUPPORTED: "Методът е за друго средство или период.",
     DISABLED_BY_PROFILE: "Изключен в индивидуалните настройки.",
     SOURCE_FAMILY_DISABLED_BY_PROFILE: "Изключен чрез настройката на оригиналния метод. Можеш да включиш тази адаптация отделно.",
+    VARIANT_REQUIRES_COACH_ACTIVATION: "Този съкратен вариант се включва изрично от треньора.",
     SHORT_SPEED_TEST_REQUIRED: "Нужен е приет кратък максимален тест за същото средство. Само петминутната опора не описва надеждно тази скорост.",
     SPORT_NOT_SUPPORTED: "Методът е за друго тренировъчно средство.",
     PRIMARY_DISCIPLINE_NOT_SUPPORTED: "Методът е за друга основна дисциплина.",

@@ -62,7 +62,9 @@ def test_large_interval_ceiling_cannot_raise_the_continuous_tmax_minimum(readine
     assert engine._dose_usage(blocks, evidence, "Z4") <= readiness_factor
     assert evidence["effort_profile"]["work_seconds"] == original["effort_profile"]["work_seconds"]
     assert evidence["effort_profile"]["total_capacity_ratio"] == 3.
-    assert evidence["effort_profile"]["max_repetitions"] == 34
+    # A larger physiological budget cannot add repeats beyond this recipe.
+    assert evidence["effort_profile"]["max_repetitions"] == original["effort_profile"]["max_repetitions"] == 6
+    assert sum(block["duration_min"] for block in blocks if block["kind"] == "WORK") <= 18.
 
 
 def test_composite_minimum_preserves_its_recipe_without_mutating_secondary_ceiling():
