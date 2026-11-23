@@ -331,9 +331,12 @@ def _render_day(context):
     return "\n".join(lines)[:18000]
 
 
-def _resolved_answer(contexts, input_request=None):
+def _resolved_answer(contexts, input_request=None, *, nutrition=False):
     """A tool budget limit does not mean the user's question was ambiguous."""
     if not input_request:
+        if nutrition:
+            from .assistant_nutrition import render_targets
+            return render_targets(contexts)
         for item in reversed(contexts):
             if item.get("query_kind") == "history" and item.get("report"):
                 return _render_history(item)
