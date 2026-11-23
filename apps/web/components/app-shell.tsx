@@ -46,7 +46,7 @@ export function AppShell({ children, athlete }: { children: ReactNode; athlete: 
   const [pending, startTransition] = useTransition();
   const [destinationLabel, setDestinationLabel] = useState("");
   const toggleRef = useRef<HTMLButtonElement>(null);
-  if (pathname === "/login" || pathname.startsWith("/auth/")) return <>{children}</>;
+  if (pathname === "/connect/chatgpt" || pathname === "/login" || pathname.startsWith("/auth/")) return <>{children}</>;
   const closeMenu = () => setMenuOpen(false);
   const navigate = (href: string, label: string, event: { preventDefault: () => void }) => {
     closeMenu();

@@ -213,3 +213,9 @@ jobs:
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
           --no-psqlrc --set ON_ERROR_STOP=1
           --file tests/database/management_preparation_status.sql
+
+      - name: Verify profile-bound OAuth credential exchange and revocation
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/chatgpt_grants.sql

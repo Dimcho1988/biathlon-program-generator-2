@@ -3,7 +3,7 @@
 import { FormEvent, useState } from "react";
 import { MagicLinkForm } from "./magic-link-form";
 
-export function LoginMethods({ callbackError = false, reauthenticate = false }: { callbackError?: boolean; reauthenticate?: boolean }) {
+export function LoginMethods({ callbackError = false, reauthenticate = false, resumeConsent = false }: { callbackError?: boolean; reauthenticate?: boolean; resumeConsent?: boolean }) {
   const [method, setMethod] = useState<"password" | "email">(callbackError || reauthenticate ? "email" : "password");
   const [state, setState] = useState<"idle" | "sending" | "invalid" | "rate-limited" | "error">("idle");
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -18,6 +18,7 @@ export function LoginMethods({ callbackError = false, reauthenticate = false }: 
         signal: AbortSignal.timeout(15_000),
       });
       // A full navigation discards any pre-login RSC snapshot after cookies change.
+      if (response.ok && resumeConsent) { window.location.reload(); return; }
       // eslint-disable-next-line @next/next/no-location-assign-relative-destination
       if (response.ok) { window.location.assign("/account"); return; }
       setState(response.status === 429 ? "rate-limited" : response.status === 401 || response.status === 400 ? "invalid" : "error");
