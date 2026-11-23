@@ -1,0 +1,22 @@
+.roster {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+form label.choice {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  overflow-wrap: anywhere;
+  min-height: 2.5rem;
+}
+form label.choice input {
+  flex: none;
+  width: 1.2rem;
+  height: 1.2rem;
+  min-height: 0;
+  padding: 0;
+}

@@ -1,4 +1,4 @@
-"""OAuth for the staging ChatGPT client, scoped to one user-selected athlete."""
+"""OAuth for the staging ChatGPT client, scoped to the user-selected athletes."""
 import base64
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -49,7 +49,10 @@ def read_grant(repo, token):
     if not token or not CHALLENGE.fullmatch(token):
         return None
     rows = repo._json(repo._request("GET", "/onflows_chatgpt_grants", params={
-        "select": "actor,athlete_alias,scopes,onflows_user_athletes(onflows_profiles(display_name))", "access_hash": "eq." + digest(token),
+        "select": ("actor,athlete_alias,scopes,"
+                   "onflows_user_athletes!onflows_chatgpt_grants_athlete_alias_fkey(onflows_profiles(display_name)),"
+                   "onflows_chatgpt_athletes(athlete_alias,allow_write,onflows_user_athletes(onflows_profiles(display_name)))"),
+        "access_hash": "eq." + digest(token),
         "access_until": "gt." + datetime.now(timezone.utc).isoformat(), "limit": "1",
     }))
     return rows[0] if len(rows) == 1 else None
@@ -76,7 +79,8 @@ def authorization_metadata():
 
 class Consent(BaseModel):
     actor: UUID
-    athlete_alias: str = Field(max_length=64)
+    athlete_alias: str = Field(default="", max_length=64)
+    athlete_aliases: list[str] | None = None
     params: dict[str, str]
     allow_write: bool = False
     approve: bool
@@ -104,20 +108,29 @@ def consent(body: Consent, authorization: str | None = Header(default=None)):
     if "state" in body.params:
         callback["state"] = body.params["state"]
     if body.approve:
-        alias = dependencies.validated_alias(body.athlete_alias, fallback=False)
+        selected = body.athlete_aliases if body.athlete_aliases is not None else [body.athlete_alias]
+        aliases = list(dict.fromkeys(dependencies.validated_alias(item, fallback=False) for item in selected))
+        if not aliases or None in aliases:
+            raise HTTPException(400, "Избери поне един спортист.")
         repo = dependencies.repository()
-        rights = assistant_commands.access(repo, alias, body.actor)
-        if not rights["can_view_plan"]:
-            raise HTTPException(403, "Нямате право за преглед на плана.")
-        granted = [READ]
-        if WRITE in scopes and body.allow_write:
-            if not rights["can_edit_plan"]:
-                raise HTTPException(403, "Нямате право за редакция на календара.")
-            granted.append(WRITE)
         code = secrets.token_urlsafe(32)
-        repo._request("POST", "/onflows_chatgpt_grants", json={"actor": str(body.actor),
-            "athlete_alias": alias, "scopes": granted, "code_hash": digest(code),
-            "challenge": body.params["code_challenge"]})
+        if len(aliases) > 1:
+            accepted = repo._json(repo._request("POST", "/rpc/create_onflows_chatgpt_roster", json={
+                "p_actor": str(body.actor), "p_aliases": aliases, "p_write": WRITE in scopes and body.allow_write,
+                "p_code_hash": digest(code), "p_challenge": body.params["code_challenge"]}))
+            if accepted is not True:
+                raise HTTPException(403, "Нямаш право за преглед на един от избраните профили.")
+        else:
+            alias = aliases[0]
+            rights = assistant_commands.access(repo, alias, body.actor)
+            if not rights["can_view_plan"]:
+                raise HTTPException(403, "Нямате право за преглед на плана.")
+            granted = [READ]
+            if WRITE in scopes and body.allow_write and rights["can_edit_plan"]:
+                granted.append(WRITE)
+            repo._request("POST", "/onflows_chatgpt_grants", json={"actor": str(body.actor),
+                "athlete_alias": alias, "scopes": granted, "code_hash": digest(code),
+                "challenge": body.params["code_challenge"]})
         callback["code"] = code
     else:
         callback["error"] = "access_denied"

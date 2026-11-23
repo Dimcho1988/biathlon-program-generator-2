@@ -78,7 +78,7 @@ def error(message, challenge=None):
                                _meta={"mcp/www_authenticate": [challenge]} if challenge else None)
 
 
-async def call(ctx, scope, action, *args):
+async def call(ctx, scope, action, *args, athlete_alias=None, list_if_multiple=False):
     authorization = ctx.request_context.request.headers.get("authorization", "")
     scheme, _, credential = authorization.partition(" ")
     wanted = f"{oauth.READ} {oauth.WRITE}" if scope == oauth.WRITE else oauth.READ
@@ -94,13 +94,38 @@ async def call(ctx, scope, action, *args):
         if scope not in grant["scopes"]:
             return error("За това действие е необходимо допълнително разрешение.",
                          challenge + ', error="insufficient_scope"')
-        alias, actor = grant["athlete_alias"], grant["actor"]
-        rights = assistant_commands.access(repo, alias, actor)
-        if not rights["can_view_plan"] or scope == oauth.WRITE and not rights["can_edit_plan"]:
-            return error("Текущите права за този спортист не позволяват действието.")
-        profile = grant.get("onflows_user_athletes") or {}
-        name = (profile.get("onflows_profiles") or {}).get("display_name")
-        result = {**action(repo, alias, actor, rights, *args), "athlete_alias": alias, "athlete_name": name}
+        actor = grant["actor"]
+        single = grant["athlete_alias"]
+        selected = ([{**grant, "allow_write": oauth.WRITE in grant["scopes"]}]
+                    if single else grant["onflows_chatgpt_athletes"])
+        def identity(row):
+            owner = row.get("onflows_user_athletes") or {}
+            name = (owner.get("onflows_profiles") or {}).get("display_name")
+            return {"athlete_alias": row["athlete_alias"], "athlete_name": name}
+
+        if list_if_multiple and athlete_alias is None and not single:
+            athletes = []
+            for row in selected:
+                try:
+                    rights = assistant_commands.access(repo, row["athlete_alias"], actor)
+                except HTTPException as exc:
+                    if exc.status_code == 403:
+                        continue
+                    raise
+                if rights["can_view_plan"]:
+                    athletes.append({**identity(row), "can_move_race": rights["can_edit_plan"] and row["allow_write"]})
+            result = {"athletes": athletes}
+        else:
+            alias = athlete_alias if athlete_alias is not None else single
+            if not alias:
+                return error("Избери спортист от get_connected_athlete и подай неговия athlete_alias.")
+            row = next((item for item in selected if item["athlete_alias"] == alias), None)
+            if row is None:
+                return error("Спортистът не е сред профилите, избрани при свързване.")
+            rights = assistant_commands.access(repo, alias, actor)
+            if not rights["can_view_plan"] or scope == oauth.WRITE and not (rights["can_edit_plan"] and row["allow_write"]):
+                return error("Текущите права за този спортист не позволяват действието.")
+            result = {**action(repo, alias, actor, rights, *args), **identity(row)}
         return types.CallToolResult(structuredContent=result, content=[
             types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))])
 
@@ -120,26 +145,26 @@ def register(server):
              "meta": {"securitySchemes": [{"type": "oauth2", "scopes": [oauth.READ, oauth.WRITE]}]}}
 
     @server.tool(**read)
-    async def get_connected_athlete(ctx: Context) -> types.CallToolResult:
-        """Проверява името на свързания спортист и неговата местна дата преди индивидуална справка."""
+    async def get_connected_athlete(ctx: Context, athlete_alias: str | None = None) -> types.CallToolResult:
+        """Без параметър показва свързаните спортисти. С athlete_alias връща името и местната дата на конкретния спортист."""
         def profile(repo, alias, actor, rights):
             settings = repo.athlete_settings(alias)
             return {"timezone": settings.timezone, "today": datetime.now(ZoneInfo(settings.timezone)).date().isoformat()} if settings else {}
-        return await call(ctx, oauth.READ, profile)
+        return await call(ctx, oauth.READ, profile, athlete_alias=athlete_alias, list_if_multiple=True)
 
     @server.tool(**read)
-    async def get_training_day(day: date, ctx: Context) -> types.CallToolResult:
+    async def get_training_day(day: date, ctx: Context, athlete_alias: str | None = None) -> types.CallToolResult:
         """Прочита запазената тренировка за местната дата и свързания спортист."""
-        return await call(ctx, oauth.READ, training_day, day)
+        return await call(ctx, oauth.READ, training_day, day, athlete_alias=athlete_alias)
 
     @server.tool(**read)
-    async def list_races(ctx: Context) -> types.CallToolResult:
+    async def list_races(ctx: Context, athlete_alias: str | None = None) -> types.CallToolResult:
         """Прочита основните и контролните стартове и текущата версия на календара."""
-        return await call(ctx, oauth.READ, races)
+        return await call(ctx, oauth.READ, races, athlete_alias=athlete_alias)
 
     @server.tool(**write)
     async def move_race_date(athlete_alias: str, event_id: Annotated[str, Field(min_length=1, max_length=80)],
                              calendar_revision: Annotated[int, Field(ge=0)], new_start_date: date,
                              ctx: Context) -> types.CallToolResult:
         """Премества един съществуващ старт при изрична заявка. Вземи event_id и версията от list_races."""
-        return await call(ctx, oauth.WRITE, move_race, athlete_alias, event_id, calendar_revision, new_start_date)
+        return await call(ctx, oauth.WRITE, move_race, athlete_alias, event_id, calendar_revision, new_start_date, athlete_alias=athlete_alias)

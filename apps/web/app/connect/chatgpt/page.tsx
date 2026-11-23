@@ -1,3 +1,4 @@
+import styles from "./consent.module.css";
 import { LoginMethods } from "../../../components/login-methods";
 import { loadAccountWorkspace } from "../../../lib/account-access";
 
@@ -24,13 +25,15 @@ export default async function ConsentPage({ searchParams }: { searchParams: Prom
     {workspace ? <form className="account-form" method="post" action="/api/integrations/chatgpt">
       <input type="hidden" name="params" value={fields.toString()} />
       <input type="hidden" name="displayedAccount" value={workspace.userId} />
-      <p>ChatGPT ще може да чете дневната програма и стартовете на избрания спортист.</p>
-      <label><span>Спортист</span><select name="athlete" required defaultValue="">
-        <option disabled value="">Избери профил</option>
-        {workspace.accessibleAthletes.map(a => <option key={a.athleteAlias} value={a.athleteAlias}>{a.displayName} · {a.athleteAlias}</option>)}
-      </select></label>
-      {write && <label><input type="checkbox" name="allowWrite" /> Разрешавам и промяна на датата на съществуващ старт.</label>}
-      <button type="submit" name="decision" value="approve" className="action-button">Свържи избрания профил</button>
+      <fieldset className={styles.roster}><legend>Избери един или повече спортисти</legend>
+        <p>ChatGPT получава достъп до дневната програма и стартовете на отбелязаните спортисти.</p>
+        {workspace.accessibleAthletes.filter(a => a.canViewPlan).map(a => <label className={styles.choice} key={a.athleteAlias}>
+          <input type="checkbox" name="athlete" value={a.athleteAlias} />
+          {a.displayName} · {a.athleteAlias}
+        </label>)}
+      </fieldset>
+      {write && <label className={styles.choice}><input type="checkbox" name="allowWrite" /> Разрешавам промяна на датите на стартовете за избраните спортисти, чиито планове мога да редактирам.</label>}
+      <button type="submit" name="decision" value="approve" className="action-button">Свържи избраните профили</button>
       <button type="submit" formNoValidate name="decision" value="deny">Откажи</button>
     </form> : <>
       <p>Влез в onFlows, за да избереш спортист и да разрешиш достъпа.</p>

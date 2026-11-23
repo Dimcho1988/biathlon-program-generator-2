@@ -30,9 +30,11 @@ export async function POST(request: Request) {
     return NextResponse.redirect(new URL("/account?saved=chatgpt-revoked", WEB), { status: 303, headers });
   }
   if (decision !== "approve" && decision !== "deny") return failure("Невалиден избор.", 400);
+  const athletes = form.getAll("athlete").map(String);
+  if (decision === "approve" && !athletes.length) return failure("Върни се и избери поне един спортист.", 400);
   const params = new URLSearchParams(String(form.get("params") ?? ""));
   const result = await fetch(new URL(endpoint + "consent", api), { ...init, body: JSON.stringify({
-    actor: user.id, athlete_alias: String(form.get("athlete") ?? ""), approve: decision === "approve",
+    actor: user.id, athlete_aliases: athletes, approve: decision === "approve",
     allow_write: form.get("allowWrite") === "on", params: Object.fromEntries(params),
   }) });
   if (!result.ok) return failure(result.status === 403 ? "Нямаш необходимите права за избрания профил." :

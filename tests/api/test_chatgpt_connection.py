@@ -59,6 +59,30 @@ def test_connected_plan_and_calendar(monkeypatch):
         rights["can_view_plan"] = False
         assert invoke("list_races", {})["isError"]
 
+        rights["can_view_plan"] = rights["can_edit_plan"] = True
+        readonly = "another-athlete"
+        hidden = "removed-athlete"
+        def roster_access(repository, athlete, user):
+            if athlete == hidden:
+                from fastapi import HTTPException
+                raise HTTPException(403)
+            assert athlete in {alias, readonly}
+            return rights.copy()
+        monkeypatch.setattr(assistant_commands, "access", roster_access)
+        grant.update(athlete_alias=None, onflows_chatgpt_athletes=[
+            {"athlete_alias": key, "allow_write": key == alias,
+             "onflows_user_athletes": {"onflows_profiles": {"display_name": "Иван"}}}
+            for key in (alias, readonly, hidden)])
+        roster = invoke("get_connected_athlete", {})["structuredContent"]["athletes"]
+        assert [p["athlete_alias"] for p in roster] == [alias, readonly]
+        assert [p["can_move_race"] for p in roster] == [True, False]
+        assert invoke("list_races", {})["isError"]
+        assert invoke("list_races", {"athlete_alias": "unselected"})["isError"]
+        assert invoke("list_races", {"athlete_alias": hidden})["isError"]
+        assert invoke("list_races", {"athlete_alias": readonly})["structuredContent"]["athlete_alias"] == readonly
+        assert invoke("move_race_date", {**args, "athlete_alias": readonly})["isError"]
+        assert invoke("move_race_date", args)["structuredContent"]["athlete_alias"] == alias
+
 
 def test_oauth_browser_to_pkce_exchange(monkeypatch):
     from urllib.parse import urlsplit, parse_qs

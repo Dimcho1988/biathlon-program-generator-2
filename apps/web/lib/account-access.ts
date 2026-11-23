@@ -39,6 +39,7 @@ type InviteRow = {
 };
 
 export interface AccessibleAthlete {
+  canViewPlan?: boolean;
   userId: string;
   athleteAlias: string;
   displayName: string;
@@ -169,7 +170,7 @@ export async function loadAccountWorkspace(): Promise<AccountWorkspace | null> {
     supabase.from("onflows_organizations").select("id, name, slug"),
     supabase.from("onflows_organization_memberships").select("organization_id, user_id, role, status"),
     supabase.from("onflows_coach_athlete_assignments").select("organization_id, coach_user_id, athlete_user_id, can_edit_plan"),
-    supabase.from("onflows_sharing_grants").select("owner_user_id, viewer_user_id, edit_plan"),
+    supabase.from("onflows_sharing_grants").select("owner_user_id, viewer_user_id, edit_plan, view_plan"),
     supabase.from("onflows_connection_invites")
       .select("id, inviter_user_id, invitee_email, organization_id, membership_role, status, expires_at, created_at")
       .eq("status", "PENDING")
@@ -209,6 +210,7 @@ export async function loadAccountWorkspace(): Promise<AccountWorkspace | null> {
       }] : [];
     }),
     accessibleAthletes: athletes.map((athlete) => ({
+      canViewPlan: athlete.is_owner && canViewAthletePlan(userId, athlete.user_id, memberships, assignments, sharingGrants),
       userId: athlete.user_id,
       athleteAlias: athlete.athlete_alias,
       displayName: profileNames.get(athlete.user_id) ?? "Спортист",
