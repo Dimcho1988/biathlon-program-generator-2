@@ -139,6 +139,49 @@ def test_generated_days_obey_shared_budget_and_keep_multiple_easy_sessions(monke
             assert sum(b["duration_min"] for b in session["blocks"]) == pytest.approx(session["total_minutes"], abs=.002)
 
 
+@pytest.mark.parametrize("zone,capacity,seconds,minimum,maximum,ratio,expected_code,session_count", [
+    ("Z4", 5., 180, 2, 6, 2., "INSUFFICIENT_DOSE_BUDGET", 0),
+    ("Z5", 20., 30, 6, 20, 2.5, "DAILY_INTENSITY_BUDGET", 1),
+])
+def test_method_role_limit_is_distinct_from_shared_daily_limit(
+        monkeypatch, zone, capacity, seconds, minimum, maximum, ratio, expected_code, session_count):
+    from biathlon import method_library
+    from tests.api.test_management_v2 import interval
+    from tests.api.test_readiness_adaptive_plan_v2 import fixed_readiness
+
+    fixed_readiness(monkeypatch, 100.)
+    p = body(sessions_per_week=2, sessions_by_day=[2, 0, 0, 0, 0, 0, 0],
+        mesocycle_anchor=TODAY.isoformat(), accent_mode="MANUAL", accents=[zone],
+        mixed_sessions_enabled=False)
+    p.update(max_key_sessions_per_week=0,
+        interval_profiles=[interval(zone, continuous_capacity_min=capacity, work_seconds=seconds,
+            min_repetitions=minimum, max_repetitions=maximum, total_capacity_ratio=ratio)],
+        component_targets_weekly={"Z1": 500., zone: 100.},
+        _allocation_policy={"balance_complete_doses": False})
+    identifier = f"END-VO2-TREF-01-{zone}"
+    methods = [method for method in engine.resolved_methods(p) if method["id"] == identifier]
+    assert len(methods) == 1
+    monkeypatch.setattr(engine, "resolved_methods", lambda _: deepcopy(methods))
+    monkeypatch.setattr(method_library, "executable_methods", lambda *args, **kwargs: [])
+
+    plan = run(monkeypatch, p, high_capacity_history())
+
+    day = plan["days"][0]
+    assert len(day["sessions"]) == session_count
+    codes = {row["code"] for row in day["rejected_alternatives"] if row["method_id"] == identifier}
+    assert expected_code in codes
+    if session_count == 0:
+        # The whole 2 × 3-minute method cannot fit its 3.9-minute role dose;
+        # there is no prior intensity to exhaust the shared daily budget.
+        assert day["daily_intensity_budget"]["used_fraction"] == 0.
+        assert "DAILY_INTENSITY_BUDGET" not in codes
+    else:
+        # A complete 6-minute maintenance dose fits, then fills the shared day.
+        assert day["sessions"][0]["main_work_minutes"] == 6.
+        assert day["daily_intensity_budget"]["used_fraction"] == pytest.approx(.6)
+        assert "INSUFFICIENT_DOSE_BUDGET" not in codes
+
+
 def test_nonbinding_single_session_days_keep_same_prescriptions(monkeypatch):
     p = body(sessions_per_week=7, sessions_by_day=[1]*7)
     p["max_key_sessions_per_week"] = 0
