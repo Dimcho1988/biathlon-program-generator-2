@@ -89,7 +89,9 @@ def test_personal_source_method_uses_shared_planner_resolution_and_whole_recover
     assert r["status"] == "READY", r
     assert r["standard_work_seconds"] == 4 * 480
     assert r["maximum_work_seconds"] == 4 * 480
-    assert r["work_options_seconds"] == [480, 960, 1440, 1920]
+    assert r["work_options_seconds"] == [1920]
+    assert r["source_minimum_repetitions"] == 4
+    assert r["role_reduction_allowed"] is False
     assert r["target_hr_bpm"] == pytest.approx(182)
     assert r["recovery_seconds"] == 150
     executable = [m for m in method_registry.executable_methods(athlete, {"NordicSki": hr_view()})
@@ -153,7 +155,7 @@ def test_native_interval_keeps_effort_anchor_rest_ratio_and_central_capacity_cei
     assert interval["work_seconds"] == interval["recovery_seconds"] == 180
     evidence = {"capacity_minutes": 2.}
     method_dosing.prepare_native_budget(method, evidence, athlete)
-    assert method["max_work_min"] == 4.
+    assert method["max_work_min"] == 3.  # One whole 3-minute effort fits the 4-minute ceiling.
     assert method["min_work_min"] == 6.  # Too little capacity: no complete permitted dose.
     assert method["interval_template"]["max_repetitions"] == 1
 

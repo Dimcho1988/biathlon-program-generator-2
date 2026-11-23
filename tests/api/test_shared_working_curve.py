@@ -76,7 +76,8 @@ def test_initial_raw_speed_has_the_same_curve_without_invented_blend(monkeypatch
         assert predictor.curve.speed(seconds) == pytest.approx(curve.speed(seconds))
         assert method_library.selected_curve(view)[0].speed(seconds) == pytest.approx(curve.speed(seconds))
     methods = method_registry.executable_methods(profile(sport="Run", actual_sport="Run",
-        planning_controls={"automatic_intervals": True}), {"Run": view})
+        planning_controls={"automatic_intervals": True},
+        method_library={"overrides": {"ONFLOWS-CONTROLLED-Z4-V2-SHORT": {"enabled": True}}}), {"Run": view})
     native = [m for m in methods if (m.get("interval_template") or {}).get("anchor") and not m.get("race_specific")]
     assert native
     for method in native:
@@ -133,7 +134,9 @@ def test_short_vo2_recipe_uses_v5_and_charges_its_actual_zone_without_clipping()
     view, bounds = running_view()
     settings = SimpleNamespace(zone_bounds_bpm=bounds, hrmax_bpm=205)
     body = profile(age_years=30, training_experience_years=5,
-        planning_controls={"automatic_intervals": True, "mixed_sessions_enabled": True})
+        planning_controls={"automatic_intervals": True, "mixed_sessions_enabled": True},
+        method_library={"overrides": {
+            "ONFLOWS-CONTROLLED-Z4-V2-MIX-REPETITIONS-SHORT": {"enabled": True}}})
     methods = method_registry.executable_methods(body, {"Run": view})
     method = next(m for m in methods if m["id"] == "ONFLOWS-CONTROLLED-Z4-V2-MIX-REPETITIONS-SHORT")
     assert method["protocol_zone"] == "Z4" and method["zone"] == "Z5"
@@ -185,7 +188,8 @@ def test_v5_parent_subdivision_and_short_variants_share_effort_and_preserve_mini
     view, bounds = running_view()
     settings = SimpleNamespace(zone_bounds_bpm=bounds, hrmax_bpm=205)
     body = profile(age_years=30, training_experience_years=5,
-        planning_controls={"automatic_intervals": True})
+        planning_controls={"automatic_intervals": True},
+        method_library={"overrides": {"ONFLOWS-CONTROLLED-Z4-V2-SPLIT-V1": {"enabled": True}}})
     methods = method_registry.executable_methods(body, {"Run": view})
     context = engine._capacity_context(view, settings)
     parent = next(m for m in methods if m["id"] == "ONFLOWS-CONTROLLED-Z4-V2")

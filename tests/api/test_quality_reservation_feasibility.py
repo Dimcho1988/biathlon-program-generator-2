@@ -35,6 +35,9 @@ def selected_methods(monkeypatch, body, identifiers):
     proven_shortage(monkeypatch)
     methods = [method for method in engine.resolved_methods(body) if method["id"] in identifiers]
     assert len(methods) == len(identifiers)
+    # Reservation tests start after the coach has explicitly chosen these
+    # structures, including mixed variants that are disabled by default.
+    body["method_library"] = {"overrides": {identifier: {"enabled": True} for identifier in identifiers}}
     monkeypatch.setattr(engine, "resolved_methods", lambda _: deepcopy(methods))
     return {method["id"]:method for method in methods}
 

@@ -11,6 +11,7 @@ import { durationSeconds } from "../lib/duration-format";
 import { isRecord } from "../lib/training-status";
 import { methodHref, methodHrText } from "../lib/method-library";
 import { METHOD_PHASES, METHOD_SPORTS, isMethodRange, methodAnchorLabel, methodSourceText, methodSourceGroup, methodReasonText, methodStatusLabel, methodWorkText, parseMethodLibrary, parseMethodPreferences, rangeText, type LibraryMethod, type MethodLibraryResponse, type MethodOverride, type MethodPreferences, type MethodRange } from "../lib/method-library";
+import { MethodSourceDetail as SourceDetail } from "./method-source";
 
 const guidanceLabels = { purpose: "Какво развиваме", execution: "Как да изпълниш", recovery: "Защо почиваме така", success: "Признаци за добро изпълнение", errors: "Типични грешки", adjustment: "Кога да коригираш", progression: "Как надграждаме" } as const;
 const unique = (values: string[]) => [...new Set(values)].filter(Boolean).sort((a, b) => a.localeCompare(b, "bg"));
@@ -18,15 +19,6 @@ const unique = (values: string[]) => [...new Set(values)].filter(Boolean).sort((
 function RangeEditor({ label, value, onChange, percent = false, integer = false }: { label: string; value: MethodRange; onChange: (range: MethodRange) => void; percent?: boolean; integer?: boolean }) {
   const factor = percent ? 100 : 1;
   return <fieldset className="method-range-editor"><legend>{label}</legend><div>{value.map((v, index) => <label key={index}><span>{index === 0 ? "От" : "До"}</span><input type="number" min={integer ? 1 : .01} step={integer ? 1 : "any"} aria-label={`${label} ${index === 0 ? "от" : "до"}`} value={Number.isFinite(v) ? Number((v * factor).toFixed(6)) : ""} onChange={event => onChange(value.map((old, i) => i === index ? event.target.value === "" ? NaN : Number(event.target.value) / factor : old) as MethodRange)} /></label>)}</div></fieldset>;
-}
-
-function SourceDetail({ label, value }: { label: string; value: unknown }) {
-  if (typeof value === "string") return value ? <div><h4>{label}</h4><p>{value}</p></div> : null;
-  if (!isRecord(value)) return null;
-  const fieldLabels: Record<string, string> = { authors: "Автори", reference: "Публикация", locator: "Страница / раздел", evidence: "Данни", result_or_intent: "Цел / резултат", population_conditions: "Участници и условия", anchor: "Опора", work: "Работа", recovery: "Почивка", repetitions: "Повторения", notes: "Уточнение", classification: "Вид адаптация", anchor_label: "Скоростна опора", recipe_text: "Структура", zone_note: "Отчитане на товара" };
-  const fieldValue = (key: string) => key === "evidence" && value[key] === "EXPLICIT_ONFLOWS_COACH_ADAPTATION_NOT_SOURCE_EQUIVALENT" ? "Треньорска адаптация на onFlows. Числовите настройки са наши работни правила; не е установен еднакъв ефект с научния оригинал." : value[key] as string;
-  const links = Array.isArray(value.links) ? value.links.filter((url): url is string => typeof url === "string" && /^https?:\/\//.test(url)) : [];
-  return <div><h4>{label}</h4>{Object.entries(fieldLabels).map(([key, name]) => typeof value[key] === "string" && value[key] ? <p key={key}><strong>{name}:</strong> {fieldValue(key)}</p> : null)}{links.length > 0 && <p className="method-source-links">{links.map((url, i) => <a key={url} href={url} target="_blank" rel="noopener noreferrer">{url.includes("doi.org") ? "DOI · публикация" : `Източник ${i + 1}`} ↗</a>)}</p>}</div>;
 }
 
 export function MethodCard({ method, override, canEdit, selected, onChange, onReset }: { method: LibraryMethod; override?: MethodOverride; canEdit: boolean; selected: boolean; onChange: (patch: MethodOverride) => void; onReset: () => void }) {
@@ -80,7 +72,7 @@ export function MethodCard({ method, override, canEdit, selected, onChange, onRe
       {reasons.length > 0 && <p className="method-note">{unique(reasons).join(" ")}</p>}
       {csEvidence && <p className="method-note"><strong>Основа за КС:</strong> {csEvidence.source === "DIRECT_ACCEPTED_TEST_CS" ? "Оценка от приети максимални тестове." : "Моделна оценка от V3 и V12 на текущата крива; не е измерен тест."} Процентът от КС не се превръща автоматично в същия процент от максималния пулс.</p>}
       {progression && <p className="method-note"><strong>Прогресия · стъпка {Number(progression.step) + 1} от {Number(progression.steps)}:</strong> {String(progression.explanation)} {progression.eligible === false ? "Тази стъпка още не е отключена." : "Стъпката е допустима; седмичният план проверява Recovery и общия бюджет."}</p>}
-      <div className="method-source"><SourceDetail label="Публикувано предписание" value={method.original}/><SourceDetail label="Адаптация за onFlows" value={method.adaptation}/><SourceDetail label="Източник" value={method.source}/></div>
+      <div className="method-source"><SourceDetail label={isRecord(method.source) && method.source.authors === "onFlows" ? "Базова треньорска рецепта" : "Публикувано предписание"} value={method.original}/><SourceDetail label="Адаптация за onFlows" value={method.adaptation}/><SourceDetail label="Източник" value={method.source}/></div>
       <p className="method-note">Диапазонът описва свързани варианти: по-къса отсечка с по-висок процент или по-дълга с по-нисък. Горните граници на скорост и продължителност не се събират автоматично. Ролята следва тренировъчната цел. Поддържащата и допълващата работа използват 60% от базовата доза на метода, без допълнителен множител по Recovery. Развиващата доза се намалява с половината от дефицита на възстановяване. Под 50% Recovery не се допуска целева работа над Z1. Планът проверява целите повторения, времето и оставащия товар.</p>
     </details>
     {canEdit && <div className="method-edit"><button className="method-text-button" type="button" aria-expanded={editing} onClick={() => setEditing(!editing)}>Настройки за спортиста{override ? " · има корекция" : ""}</button>{editing && <div>

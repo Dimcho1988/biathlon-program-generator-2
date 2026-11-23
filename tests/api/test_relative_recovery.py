@@ -79,7 +79,11 @@ def test_partial_recovery_dose_does_not_spend_other_components_preparation(monke
         sessions_per_week=11, sessions_by_day=[2,2,2,2,2,1,0], long_session_day=5,
         mixed_sessions_enabled=True)
     from tests.api.test_management_v2 import interval
-    body["interval_profiles"] = [interval(continuous_capacity_min=35., total_capacity_ratio=2., max_repetitions=6)]
+    # Full coach recipe: 12 × 3 = 36 min; 60% maintenance gives 21.6 min,
+    # permitting one whole 18-min Z4 visit. A six-effort full recipe instead
+    # needs two visits here, changing preparation and daily-intensity usage
+    # and making this allocation fixture test a resulting Z3 shortage.
+    body["interval_profiles"] = [interval(continuous_capacity_min=35., total_capacity_ratio=2., max_repetitions=12)]
     # Synthetic coach objectives isolate allocation from the progression
     # policy above. Keep real capacities, readiness, whole doses and Q/E gates.
     targets = {"Z1":400., "Z2":100., "Z3":80., "Z4":20., "Z5":0., "STR":0.}

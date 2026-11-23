@@ -258,3 +258,27 @@ def test_new_day_still_prepares_daily_doses_when_source_data_is_identical(system
     monkeypatch.setattr(management_service, "build_draft", daily)
     with pytest.raises(RuntimeError, match="daily preparation reached"):
         lifecycle.refresh(system.repo, "athlete", automatic=True, now=NOW+timedelta(days=1))
+
+
+@pytest.mark.parametrize("changed_structure", [False, True])
+def test_structure_policy_change_rechecks_today_instead_of_freezing_old_dose(system, monkeypatch, changed_structure):
+    activate(system)
+    old = system.plans.records[-1]["payload"]["plan"]
+    today = TODAY + timedelta(days=1)
+    # This is a saved unexecuted prescription. Its exact content is irrelevant
+    # to the lifecycle's decision to retain or release the day's old recipe.
+    day = next(d for d in old["days"] if d["date"] == today.isoformat())
+    day["session"] = {"method_id": "LEGACY-ONE-REPEAT", "total_minutes": 25.25}
+    if changed_structure:
+        old["input_snapshot"]["rule_versions"].pop("method_structure")
+    original = deepcopy(old)
+    def capture(*args, **kwargs):
+        if changed_structure:
+            assert kwargs["locked_day"] is None
+        else:
+            assert kwargs["locked_day"]["session"]["method_id"] == "LEGACY-ONE-REPEAT"
+        raise RuntimeError("inspected today's recipe policy")
+    monkeypatch.setattr(management_service, "build_draft", capture)
+    with pytest.raises(RuntimeError, match="inspected today's recipe policy"):
+        lifecycle.refresh(system.repo, "athlete", automatic=True, force=True, now=advance(system, 1))
+    assert system.plans.records[-1]["payload"]["plan"] == original

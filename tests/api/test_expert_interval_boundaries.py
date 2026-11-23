@@ -118,14 +118,16 @@ def test_mixed_method_retains_independent_primary_capacity_with_interval_coeffic
     assert method == before
 
 
-@pytest.mark.parametrize("policy,readiness,expected_sessions", [
-    ("MODEL_WITH_PRIOR", 100., 1),
-    ("MODEL_WITH_PRIOR", 80., 1),
-    ("OBSERVED_ONLY", 100., 0),
-    ("MODEL_WITH_PRIOR", 0., 0),
+@pytest.mark.parametrize("policy,readiness,ratio,expected_sessions", [
+    ("MODEL_WITH_PRIOR", 100., 3., 0),
+    ("MODEL_WITH_PRIOR", 80., 3., 0),
+    ("MODEL_WITH_PRIOR", 100., 4., 1),
+    ("MODEL_WITH_PRIOR", 80., 4., 1),
+    ("OBSERVED_ONLY", 100., 4., 0),
+    ("MODEL_WITH_PRIOR", 0., 4., 0),
 ])
 def test_mixed_reservation_and_prescription_share_curve_policy_and_single_recovery(
-        monkeypatch, policy, readiness, expected_sessions):
+        monkeypatch, policy, readiness, ratio, expected_sessions):
     from tests.api.test_methodology_completion import proven_shortage
     proven_shortage(monkeypatch)
     from biathlon import hr_speed, speed_duration
@@ -144,7 +146,7 @@ def test_mixed_reservation_and_prescription_share_curve_policy_and_single_recove
     speed.update(sport="Run", source_generation_id="generation-one", source_revision=1)
     speed["hr_model"] = engine._capacity_context(speed, repo.settings)[0].summary()
     body = configured(age_years=30, training_experience_years=5,
-                      interval_profiles=[interval_method()["interval_profile"]],
+                      interval_profiles=[{**interval_method()["interval_profile"], "total_capacity_ratio": ratio}],
                       available_minutes=[180] * 7)
     body["planning_controls"].update(capacity_policy=policy, accents=["Z3"], sessions_per_week=1,
         sessions_by_day=[0, 1, 0, 0, 0, 0, 0], threshold_days=[1])
@@ -159,19 +161,24 @@ def test_mixed_reservation_and_prescription_share_curve_policy_and_single_recove
     sessions = [session for day in plan["days"] for session in day["sessions"]]
     assert len(sessions) == expected_sessions
     if not sessions:
+        if ratio == 3.:
+            # Half the profile budget provides 78s (70.2s at 80 readiness),
+            # less than its hard 2×40s minimum. Keep the whole recipe or rest.
+            assert any(r["code"] == "MINIMUM_CAPACITY_DOSE" for day in plan["days"]
+                       for r in day["rejected_alternatives"])
         return
     evidence = sessions[0]["dose_evidence"]
     factor = .5 + readiness / 200
     assert evidence["capacity_minutes"] == pytest.approx(tmax_seconds / 60)
     assert evidence["primary_requested_work"] == pytest.approx(tmax_seconds / 60 * .65 * .5 * factor)
-    assert evidence["combination_high_work_cap"] == pytest.approx(80 / 60 * 3 * .65 * .5 * factor)
+    assert evidence["combination_high_work_cap"] == pytest.approx(80 / 60 * ratio * .65 * .5 * factor)
     secondary = evidence["secondary_capacity"]
     assert secondary["capacity_reference"] == "EXPERT_REPETITION_DURATION_COEFFICIENT_ON_CURVE"
     assert secondary["capacity_minutes"] == pytest.approx(80 / 60)
     from biathlon import daily_intensity
     contract = evidence["daily_intensity"]
     high_reference = next(r for r in contract["references"] if r["zones"] == ["Z5"])
-    assert high_reference["minutes"] == pytest.approx(80 / 60 * 3 * .65 * factor)
+    assert high_reference["minutes"] == pytest.approx(80 / 60 * ratio * .65 * factor)
     legacy = deepcopy(sessions[0])
     legacy["dose_evidence"].pop("daily_intensity")
     restored = daily_intensity.saved_contract(legacy)
@@ -179,6 +186,6 @@ def test_mixed_reservation_and_prescription_share_curve_policy_and_single_recove
     assert daily_intensity.usage(legacy["blocks"], restored["references"]) == pytest.approx(
         daily_intensity.usage(legacy["blocks"], contract["references"]))
     high_blocks = [block for block in sessions[0]["blocks"] if block["kind"] == "WORK" and block["zone"] == "Z5"]
-    assert high_blocks
+    assert len(high_blocks) >= 2
     assert all(block["target_speed_kmh"] == pytest.approx(curve.speed(80) * 3.6, abs=.001)
                for block in high_blocks)

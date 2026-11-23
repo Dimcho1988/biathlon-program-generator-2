@@ -2,7 +2,7 @@
 from copy import deepcopy
 from types import SimpleNamespace
 import pytest
-from biathlon import method_library as lib, dosing_curve, speed_duration, hr_speed, speed_zones
+from biathlon import method_library as lib, dosing_curve, speed_duration, hr_speed, speed_zones, adaptive_methods
 from apps.api import training_plan_engine as engine
 from tests.api.test_training_plan_engine import TODAY, BOUNDS
 
@@ -84,12 +84,15 @@ def test_budget_only_source_does_not_manufacture_hundred_repeat_ceiling():
 def test_recovery_scales_whole_repeats_once_and_passive_time_is_not_work(monkeypatch):
     r=recipe(); r["prescription"].update(source_repetitions_range=[8,8],allow_fewer_repetitions=True)
     m,e,settings=adapter(monkeypatch,r)
+    e["readiness_policy"] = adaptive_methods.readiness_policy(m, athlete(), {f"Z{i}": 80 for i in range(1, 6)})
     fraction=engine._nominal_fraction(m,"BUILDING",athlete(),"SPECIAL_PREPARATION",e,{})
-    requested=e["capacity_minutes"]*fraction*.5
+    requested=e["capacity_minutes"]*fraction*e["readiness_dose_factor"]
     blocks=engine._blocks(m,requested,e,settings)
     work=[b for b in blocks if b["kind"]=="WORK"]
     rests=[b for b in blocks if b["kind"]=="RECOVERY"]
     assert len(work) == int(requested*60/m["method_library"]["resolution"]["cycle_work_seconds"])
+    assert len(work) == 7  # Eight source efforts, one 90% readiness adjustment.
+    assert engine._blocks(m, 6*m["method_library"]["resolution"]["cycle_work_seconds"]/60, e, settings) == []
     assert len(rests) == len(work)-1
     assert all(b["passive_rest"] for b in rests)
     assert all(b["method_library"]["id"]=="TEST" for b in work)

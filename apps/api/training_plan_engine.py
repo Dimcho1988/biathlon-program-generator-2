@@ -38,8 +38,8 @@ from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 from . import plan_speed_comparison
 
-VERSION = "training-management-v78-weekly-development-and-coverage"
-PARAMETER_VERSION = "management-parameters-v63"
+VERSION = "training-management-v80-bounded-full-method-dose"
+PARAMETER_VERSION = "management-parameters-v65"
 MIN_AEROBIC_DOSE_FRACTION = 0.  # Native recipes own their structural minimum; no generic Tmax floor.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -720,6 +720,8 @@ def _block(kind, label, zone, minutes, hr, instructions, *, speed=None, repetiti
 
 def _blocks(method, work, evidence, settings):
     blocks = _blocks_impl(method, work, evidence, settings)
+    if blocks and not method_dosing.structure_fits(blocks, evidence):
+        return []
     from biathlon.sport_heart_rate import local_settings
     local = local_settings(settings, method.get("actual_sport"))
     for block in blocks:
@@ -1454,6 +1456,7 @@ def _interval_budget_profile(method):
 
 def _nominal_fraction(method, purpose, profile, period, evidence, controls):
     fraction = _nominal_fraction_impl(method, purpose, profile, period, evidence, controls)
+    method_dosing.apply_structure_floor(method, evidence)
     evidence.pop("whole_dose_rounding_factor", None)
     evidence.pop("whole_role_work_minutes", None)
     if (evidence.get("capacity_minutes") and method["zone"] in {"Z3", "Z4", "Z5"} and evidence.get("resolved_role") == "BUILDING" and not any(method.get(k) for k in
@@ -1531,8 +1534,14 @@ def _nominal_fraction_impl(method, purpose, profile, period, evidence, controls)
     interval = _interval_budget_profile(method)
     if interval:
         role = fraction
-        fraction = interval["total_capacity_ratio"] * role
+        raw_full = evidence["capacity_minutes"] * interval["total_capacity_ratio"] * continuous_building_fraction(profile)
+        full = min(raw_full, method["max_work_min"])
+        # Resolve the full authored method first. Applying maintenance before
+        # this ceiling could prescribe the same maximum for both roles and
+        # make a complete building method look smaller than maintenance.
+        fraction = full/evidence["capacity_minutes"] * (.6 if maintenance else 1.)
         evidence.update(approved_interval_work_capacity_ratio=interval["total_capacity_ratio"],
+                        unbounded_full_method_work_minutes=raw_full, full_method_work_minutes=full,
                         method_budget_role_fraction=role,
                         dose_capacity_basis="WHOLE_STRUCTURE_WORK_CAPACITY",
                         nominal_capacity_basis="EXPERT_METHOD_WORK_BUDGET_TIMES_CONTINUOUS_TMAX")
@@ -1594,7 +1603,8 @@ def _daily_intensity_contract(method, evidence, profile, purpose, controls, *, d
         if not library and secondary.get("zone") in daily_intensity.HIGH:
             secondary_ratio = parent.get("interval_profile", {}).get("total_capacity_ratio", 1.)
             contract["references"].append({"part": part, "zones": [secondary["zone"]],
-                "minutes": secondary["capacity_minutes"] * secondary_ratio * continuous_building_fraction(profile) * factor,
+                "minutes": secondary.get("full_method_work_minutes",
+                    secondary["capacity_minutes"] * secondary_ratio * continuous_building_fraction(profile)) * factor,
                 "method_id": parent["id"], "role": role, "recovery_factor": factor})
     return contract
 
@@ -1618,7 +1628,8 @@ def _dose_ceiling(method, purpose, profile, period, evidence, controls, generic_
         return (controls or {}).get("double_threshold_fraction", .5) * (continuous_maintenance_fraction(profile) if purpose != "BUILDING" or period == "RE_ENTRY" else continuous_building_fraction(profile))
     interval = _interval_budget_profile(method)
     if interval:
-        maximum = continuous_maintenance_fraction(profile) if purpose in {"MAINTENANCE", "RECOVERY", "SUPPORTING", "ACTIVATION"} or period == "RE_ENTRY" or reentry else continuous_building_fraction(profile)
+        nominal = _nominal_fraction(method, purpose, profile, period, evidence, controls)
+        maximum = nominal/interval["total_capacity_ratio"]
     else:
         nominal = _nominal_fraction(method, purpose, profile, period, evidence, controls)
         maximum = min(generic_ceiling, nominal / evidence.get("method_work_capacity_ratio", 1.)) if method["zone"] != "STR" else generic_ceiling
@@ -1626,8 +1637,14 @@ def _dose_ceiling(method, purpose, profile, period, evidence, controls, generic_
             maintenance_limit = .39 if method["structure"] == "CONTINUOUS" and method["zone"] in {"Z1", "Z2"} else continuous_maintenance_fraction(profile)
             maximum = min(maximum, maintenance_limit)
     if evidence.get("secondary_capacity"):
-        evidence["secondary_max_fraction"] = (.6 if evidence["secondary_capacity"].get("effort_profile")
-                                               else continuous_maintenance_fraction(profile))
+        secondary = evidence["secondary_capacity"]
+        if secondary.get("full_method_work_minutes") is not None and secondary.get("fraction") is not None:
+            # This fraction already owns the secondary half, role and Recovery.
+            # Normalize only to the denominator used by _dose_fits.
+            evidence["secondary_max_fraction"] = secondary["fraction"]/secondary.get("effort_profile", {}).get("total_capacity_ratio", 1.)
+        else:
+            evidence["secondary_max_fraction"] = (.6 if secondary.get("effort_profile")
+                                                   else continuous_maintenance_fraction(profile))
         evidence["combination_allocation"] = "COMPONENT_METHOD_BUDGETS_WITH_SHARED_CANONICAL_Q_E"
         evidence["session_dose_policy"] = "DIRECT_WORK_WITHIN_METHOD_ROLE_BUDGETS_E_FOR_PLAN_CONSTRAINTS"
     return maximum
@@ -1643,14 +1660,26 @@ def _prepare_threshold_high_budget(method, evidence, profile, settings, speed, c
     """
     p = method["interval_profile"]
     controls = profile.get("planning_controls") or {}
-    high_method = {**method, "zone": p["zone"], "structure": "METABOLIC_INTERVALS"}
+    high_method = {**method, "zone": p["zone"], "structure": "METABOLIC_INTERVALS",
+                   "min_work_min": p["min_repetitions"]*p["work_seconds"]/60,
+                   "max_work_min": p["max_repetitions"]*p["work_seconds"]/60}
+    # The secondary recipe owns its authored bounds. The primary threshold
+    # work range/cache cannot cap or reduce its independent interval structure.
+    for key in ("source_work_minutes", "authored_interval_bounds", "_resolved_dose_key"):
+        high_method.pop(key, None)
     high_capacity = capacity_for(high_method,
         settings, speed, context, today, profile.get("allow_expert_fallback", True),
         use_model_prior=controls.get("capacity_policy") == "MODEL_WITH_PRIOR")
     if high_capacity is None:
         return False
     method_dosing.prepare_native_budget(high_method, high_capacity, profile)
-    high_fraction = p["total_capacity_ratio"] * continuous_building_fraction(profile) * (.30 if evidence.get("resolved_role") in {"MAINTENANCE", "SUPPORTING", "RECOVERY"} else .5) * readiness_factor
+    high_capacity.update(resolved_role=evidence.get("resolved_role", "BUILDING"),
+                         readiness_dose_factor=readiness_factor)
+    method_dosing.apply_structure_floor(high_method, high_capacity)
+    raw_full = high_capacity["capacity_minutes"] * p["total_capacity_ratio"] * continuous_building_fraction(profile)
+    full = min(raw_full, high_method["max_work_min"])
+    high_capacity.update(unbounded_full_method_work_minutes=raw_full, full_method_work_minutes=full)
+    high_fraction = full/high_capacity["capacity_minutes"] * (.30 if evidence.get("resolved_role") in {"MAINTENANCE", "SUPPORTING", "RECOVERY", "ACTIVATION"} else .5) * readiness_factor
     evidence.update(primary_requested_work=evidence["capacity_minutes"] * primary_fraction * readiness_factor,
                     combination_high_work_cap=high_capacity["capacity_minutes"] * high_fraction,
                     secondary_capacity={**high_capacity, "zone": p["zone"], "fraction": high_fraction})
@@ -1671,7 +1700,8 @@ def _locked_dose_fits(session, profile, readiness):
         first = evidence["combined_budgets"][0]
         nominal = evidence["capacity_minutes"]*first["fraction"]*first.get("readiness_factor", 1.)
         rounding = max(1., first.get("whole_role_work_minutes", nominal)/max(1e-9, nominal))
-    return (primary <= evidence["capacity_minutes"]*evidence["base_fraction"]*factor*rounding + .005
+    return (method_dosing.structure_fits(session["blocks"], evidence)
+            and primary <= evidence["capacity_minutes"]*evidence["base_fraction"]*factor*rounding + .005
             and _dose_fits(session["blocks"], {**evidence, "readiness_dose_factor": factor}, session["zone"], base_max*factor, tolerance=.005))
 
 
@@ -1706,6 +1736,9 @@ def _previous_work(method, work):
         return strength_methods.previous(method, work)
     if method.get("structure") == "STRENGTH_CIRCUIT":
         return _quantized_work(method, work)-3.
+    if method.get("structure") in {"MODEL_INTERVALS", "METABOLIC_INTERVALS"}:
+        interval = method.get("interval_template") or method.get("interval_profile")
+        return _quantized_work(method, work)-interval["work_seconds"]/60
     if method.get("method_library") and method["method_library"]["resolution"]["structure"] != "CONTINUOUS":
         r = method["method_library"]["resolution"]
         if r["structure"] in {"SCALED_SEQUENCE", "PROGRESSIVE_CONTINUOUS"}:
@@ -1789,9 +1822,8 @@ def _minimum_work(method, evidence, settings):
         return r["minimum_work_seconds"] / 60
     primary_only = bool(method.get("mixed_component") or method.get("developmental_variant"))
     minimum = method.get("minimum_fraction", MIN_AEROBIC_DOSE_FRACTION) * evidence.get("readiness_dose_factor", 1.)
-    # Capacity-dosed native intervals already allow one whole effort; their
-    # original example repeat count is not a hard floor. Introductory,
-    # supporting and race recipes keep their declared complete structure.
+    # Native intervals retain their authored role-adjusted whole-repeat floor.
+    # Remaining weekly/day capacity cannot lower this structural contract.
     native_interval = (method['structure'] in {'MODEL_INTERVALS', 'METABOLIC_INTERVALS'}
         and not any(method.get(k) for k in ('developmental_variant', 'mixed_component', 'race_specific')))
     structural_minimum = (method['min_work_min'] if native_interval else
@@ -2593,8 +2625,29 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         dose and passes the same Q/E, time and Recovery checks as a standalone
         method; no separate feasibility solver decides eligibility.
         """
-        candidates = [(sport, m) for sport in training_sports for m in methods_for_day(d)
-                      if sport in m["sports"] and (m["zone"] != "STR" or sport == primary_sport)]
+        candidates, seen_candidates = [], set()
+        day_methods = methods_for_day(d)
+        registered = {(sport, m["id"]): m for m in day_methods for sport in m["sports"]}
+        for sport in training_sports:
+            for method in day_methods:
+                if sport not in method["sports"] or method["zone"] == "STR" and sport != primary_sport:
+                    continue
+                # Eligibility applies to the constituent method before any
+                # combination is built. An unexposed parent cannot bypass the
+                # introductory policy by appearing inside a combined session.
+                if method["structure"] == "MODEL_INTERVALS" and not method.get("developmental_variant"):
+                    exposures = recorded_exposures.get((sport, method["zone"]), set()) & exposure_history_dates
+                    if len(exposures) < 2:
+                        # Use the exact registered child, including its bound
+                        # effort and source card; transforming a registered
+                        # parent would retain the parent's frozen full recipe.
+                        method = registered.get((sport, method["id"]+"-SHORT"))
+                        if method is None or not method_registry.enabled(profile, method):
+                            continue
+                identity = (sport, method["id"])
+                if identity not in seen_candidates:
+                    candidates.append((sport, method))
+                    seen_candidates.add(identity)
         period, taper = _phase(periodization, d)
         if not controls or not controls.get("mixed_sessions_enabled", True) or limited or taper:
             return candidates, combined_methods.opportunities({}, {}, 0)
@@ -2697,10 +2750,6 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     and future_phase in {"PRECOMPETITION", "COMPETITION"} and fm["purpose"] == "BUILDING"
                     and fm["zone"] not in race_zones):
                     continue
-                if fm["structure"] == "MODEL_INTERVALS" and not fm.get("developmental_variant"):
-                    exposures = recorded_exposures.get((sport, fm["zone"]), set()) & exposure_history_dates
-                    if len(exposures) < 2:
-                        fm = adaptive_methods.short_variant(fm)
                 fm["actual_sport"] = sport
                 threshold_choice = (controls or {}).get("threshold_method", "AUTO")
                 if not threshold_allowed(fm, threshold_choice):
@@ -3012,6 +3061,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             below_minimum = any(s["zone"] != "STR" and
                 _minimum_dose_usage(s["blocks"], s["dose_evidence"], s["zone"], primary_only=bool(s.get("mixed_component") or s["dose_evidence"].get("developmental_variant"))) + 1e-9 < (s["dose_evidence"].get("min_dose_fraction", .25) or 0.)
                 for s in preserved)
+            structure_invalid = any(not method_dosing.current_structure_known(s["dose_evidence"])
+                or not method_dosing.structure_fits(s["blocks"], s["dose_evidence"]) for s in preserved)
             preserved_intensity = daily_intensity.summary(intensity_before, preserved)
             double_continuation = (locked_day.get("double_threshold_continuation")
                 and day.weekday() in double_days and len(preserved) == 1
@@ -3024,6 +3075,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             if not preserved_intensity_ok:
                 item.update(status="REVIEW_REQUIRED", explanation="Общата дневна доза в Z3–Z5 надвишава допустимото или няма актуална проверка. Утвърдените задачи изискват преглед.")
                 item["rejected_alternatives"].append({"method_id": "LOCKED_SESSION", "code": "DAILY_INTENSITY_BUDGET", "reason": item["explanation"]})
+                activation_eligible = False
+            elif structure_invalid:
+                item.update(status="REVIEW_REQUIRED", explanation="Утвърдената задача няма актуална проверка за минималната цяла структура на метода или е под нея. Необходимо е ново разпределение.")
+                item["rejected_alternatives"].append({"method_id": "LOCKED_SESSION", "code": "METHOD_STRUCTURE_REVIEW", "reason": item["explanation"]})
                 activation_eligible = False
             elif below_minimum:
                 item.update(status="REVIEW_REQUIRED", explanation="Днешната утвърдена задача е под минималната относителна доза. Нужен е преглед; не се запазва автоматично кратката сесия.")
@@ -3115,10 +3170,6 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                             continue
                         fm = _copy_method_budget(future_method)
                         fm["planned_long_session"] = future_kind == "LONG"
-                        if fm["structure"] == "MODEL_INTERVALS" and not fm.get("developmental_variant"):
-                            exposures = recorded_exposures.get((future_sport, fz), set()) & exposure_history_dates
-                            if len(exposures) < 2:
-                                fm = adaptive_methods.short_variant(fm)
                         fm["actual_sport"] = future_sport
                         threshold_choice = (controls or {}).get("threshold_method", "AUTO")
                         if not threshold_allowed(fm, threshold_choice):
@@ -3416,10 +3467,6 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             for sport, method in candidates:
                 allocation = slot_allocation
                 speed, context = speed_by_sport[sport], context_by_sport[sport]
-                if method["structure"] == "MODEL_INTERVALS" and not method.get("developmental_variant"):
-                    exposures = recorded_exposures.get((sport, method["zone"]), set()) & exposure_history_dates
-                    if len(exposures) < 2:
-                        method = adaptive_methods.short_variant(method)
                 original_method = method
                 method = _copy_method_budget(method)
                 method["planned_long_session"] = day.weekday() == preferences.get("long_session_day")

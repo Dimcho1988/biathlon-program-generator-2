@@ -256,7 +256,9 @@ def test_z4_maintenance_can_fit_whole_profile_at_less_than_full_readiness(monkey
     from tests.api.test_management_v2 import interval
 
     fixed_readiness(monkeypatch, 80.)
-    body = threshold_profile(interval_profiles=[interval(min_repetitions=2)])
+    # The coach explicitly allows this single complete repetition. Reduced
+    # readiness must not silently turn an authored two-repeat minimum into one.
+    body = threshold_profile(interval_profiles=[interval(min_repetitions=1)])
     method = next(m for m in engine.resolved_methods(body) if m["id"] == "END-VO2-TREF-01-Z4")
     monkeypatch.setattr(engine, "resolved_methods", lambda _: [deepcopy(method)])
     plan = generate(body)

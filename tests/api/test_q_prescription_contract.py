@@ -178,7 +178,7 @@ def test_effective_search_bound_covers_different_doses_and_splits():
         assert bound["STR"] == q["STR"]
 
 
-@pytest.mark.parametrize("target,expect_supplement", [(1.5, True), (3., False), (40., None)])
+@pytest.mark.parametrize("target,expect_supplement", [(1.5, True), (9., False), (40., None)])
 def test_free_slots_do_not_reject_a_supplement_without_a_legal_standalone(monkeypatch, target, expect_supplement):
     from tests.api.test_load_progression import configured, observed
     from tests.api.test_management_v2 import reference_speed
@@ -193,6 +193,9 @@ def test_free_slots_do_not_reject_a_supplement_without_a_legal_standalone(monkey
     from tests.api.test_management_v2 import interval
     profile["interval_profiles"] = [interval()]
     ids = {"END-VO2-TREF-01-Z4", "END-VO2-TREF-01-Z4-MIX-REPETITIONS-SHORT"}
+    # This test explicitly opts into the supplementary recipe. The standalone
+    # coach method retains its complete three-by-three-minute minimum.
+    profile["method_library"] = {"overrides": {identifier: {"enabled": True} for identifier in ids}}
     methods = [m for m in engine.resolved_methods(profile) if m["id"] in ids]
     assert len(methods) == 2
     monkeypatch.setattr(engine, "resolved_methods", lambda _: deepcopy(methods))

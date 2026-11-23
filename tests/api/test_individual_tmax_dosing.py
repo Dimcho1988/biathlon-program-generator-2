@@ -14,16 +14,22 @@ from tests.api.test_sourced_method_library import recipe, athlete, view, adapter
 @pytest.mark.parametrize('capacity', [5., 10., 20.])
 @pytest.mark.parametrize('building', [.6, .65, .7])
 @pytest.mark.parametrize('role', ['BUILDING', 'MAINTENANCE', 'SUPPORTING'])
-def test_interval_uses_individual_tmax_method_coefficient_role_and_half_deficit(capacity, building, role):
-    method = dict(id='CHECK', zone='Z4', structure='MODEL_INTERVALS', min_work_min=3., max_work_min=3.,
-        interval_template=dict(work_seconds=90, recovery_seconds=90, min_repetitions=2, max_repetitions=2, total_capacity_ratio=2.5))
+@pytest.mark.parametrize('authored_max_repetitions', [2, 40])
+def test_interval_uses_individual_tmax_method_coefficient_role_and_half_deficit(capacity, building, role, authored_max_repetitions):
+    authored_max_minutes = 1.5 * authored_max_repetitions
+    method = dict(id='CHECK', zone='Z4', structure='MODEL_INTERVALS', min_work_min=3., max_work_min=authored_max_minutes,
+        interval_template=dict(work_seconds=90, recovery_seconds=90, min_repetitions=2, max_repetitions=authored_max_repetitions, total_capacity_ratio=2.5))
     evidence = dict(capacity_minutes=capacity, readiness_policy=dict(observed_dose_factor=.8))
     f = engine._nominal_fraction(method, role, {'building_fraction':building}, 'GENERAL_PREPARATION', evidence, {})
-    expected = capacity*2.5*building*(.9 if role == 'BUILDING' else .6)
+    full = min(capacity*2.5*building, authored_max_minutes)
+    expected = full*(.9 if role == 'BUILDING' else .6)
     assert capacity*f*evidence['readiness_dose_factor'] == pytest.approx(expected)
-    assert method['max_work_min'] == pytest.approx(capacity*2.5)
+    # The full method is bounded first; maintenance and Recovery each act once.
+    assert evidence['full_method_work_minutes'] == pytest.approx(full)
+    assert method['max_work_min'] <= authored_max_minutes
+    assert method['interval_template']['max_repetitions'] <= authored_max_repetitions
     ceiling = engine._dose_ceiling(method, role, {'building_fraction':building}, 'GENERAL_PREPARATION', evidence, {})
-    assert ceiling == pytest.approx(building*(1 if role == 'BUILDING' else .6))
+    assert ceiling == pytest.approx(full/(capacity*2.5)*(1 if role == 'BUILDING' else .6))
     blocks = [{'kind':'WORK','zone':'Z4','duration_min':expected}]
     assert engine._dose_fits(blocks, evidence, 'Z4', ceiling*evidence['readiness_dose_factor'])
     rounded = evidence.get('whole_role_work_minutes', expected)
@@ -91,7 +97,8 @@ def test_progressive_efforts_use_method_coefficient_but_minimum_stays_continuous
 
 def test_dynamic_native_methods_receive_range_preferences_before_capacity_resolution():
     from biathlon import method_registry
-    method = deepcopy(next(m for m in engine.resolved_methods({'planning_controls':{'automatic_intervals':True}})
+    method = deepcopy(next(m for m in engine.resolved_methods({'age_years': 25, 'training_experience_years': 5,
+                           'planning_controls':{'automatic_intervals':True}})
                            if m['structure'] == 'MODEL_INTERVALS'))
     method['id'] = 'ONFLOWS-RACE-RACE-Z4-V1'
     profile = {'method_library':{'overrides':{method['id']:{'speed_tolerance_fraction':.01, 'hr_tolerance_bpm':2., 'total_capacity_ratio':2.5}}}}

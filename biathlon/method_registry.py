@@ -8,7 +8,7 @@ from hashlib import sha256
 import json
 from . import method_anchors, method_dosing, method_library, training_methods, race_specific
 
-VERSION = 'method-registry-v7-working-curve-efforts'
+VERSION = 'method-registry-v8-preserved-method-structures'
 COMBINED_STRUCTURES = {'ALTERNATING', 'CRUISE_ALTERNATING', 'THRESHOLD_HIGH', 'AEROBIC_STRENGTH', 'AEROBIC_SUPPORT', 'MIXED_AEROBIC'}
 
 
@@ -34,6 +34,19 @@ def coach_card(method):
             'interval': deepcopy(interval), 'work_minutes': [method['min_work_min'], method['max_work_min']]}}
 
 
+    if interval:
+        def count_text(low, high):
+            return str(low) if low == high else f"{low}–{high}"
+        card['original'] = {
+            'work': f"{interval['work_seconds']:g} сек",
+            'repetitions': count_text(interval['min_repetitions'], interval['max_repetitions']),
+            'recovery': f"{interval['recovery_seconds']:g} сек",
+            'notes': 'Базова структура на треньорския профил на onFlows; намалената доза запазва цели повторения.',
+        }
+    if method.get('variation_parent_id') and not method.get('developmental_variant'):
+        card['derived_from'] = [method['variation_parent_id']]
+    if method.get('requires_coach_activation'):
+        card['guidance']['adjustment'] += ' Този съкратен вариант се включва изрично от треньора.'
     if method.get('strength_profile'):
         p = method['strength_profile']
         card['coach_profile']['strength'] = deepcopy(p)
@@ -125,13 +138,15 @@ def catalog(profile, speed_view=None, *, phase=None, today=None):
             m['dosing'] = method_dosing.parameters(m, profile)
         card = coach_card(m)
         allowed = enabled(profile, m)
+        activation_required = (m.get('requires_coach_activation')
+            and (profile.get('method_library') or {}).get('overrides', {}).get(m['id'], {}).get('enabled') is not True)
         mixed_off = not (profile.get('planning_controls') or {}).get('mixed_sessions_enabled', True) and (m.get('mixed_component') or m['structure'] in COMBINED_STRUCTURES)
         compatible = sport in m['sports'] and (phase is None or phase in m['periods'])
         anchor = method_anchors.definition(m)
         unresolved = anchor['type'] == 'UNRESOLVED' or anchor_unavailable
         card['resolution'] = {'status': 'DISABLED' if not allowed or mixed_off else 'UNAVAILABLE' if unresolved else 'READY' if compatible else 'INCOMPATIBLE',
             'anchor': anchor,
-            'reason': 'DISABLED_BY_PROFILE' if not allowed or mixed_off else anchor.get('reason', 'INDIVIDUAL_CURVE_ANCHOR_REQUIRED') if unresolved else None if compatible else 'SPORT_OR_PERIOD_NOT_SUPPORTED',
+            'reason': 'VARIANT_REQUIRES_COACH_ACTIVATION' if activation_required else 'DISABLED_BY_PROFILE' if not allowed or mixed_off else anchor.get('reason', 'INDIVIDUAL_CURVE_ANCHOR_REQUIRED') if unresolved else None if compatible else 'SPORT_OR_PERIOD_NOT_SUPPORTED',
             'phase': phase, 'zone': m['zone'], 'automatic_selection_enabled': allowed and not mixed_off,
             'selection_basis': 'COACH_PROFILE_RECHECKED_AGAINST_CAPACITY_RECOVERY_AND_WEEKLY_BUDGET',
             'message': 'Личната доза се изчислява в седмичния план. Числовият профил се настройва в „Управление“.'}

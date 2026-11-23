@@ -40,7 +40,7 @@ def test_original_hr_protocol_does_not_require_speed_curve_or_synthetic_tmax():
     assert resolved["recovery_seconds"] == 180
 
 
-def test_selected_standard_is_not_source_range_maximum_and_reductions_are_whole():
+def test_selected_standard_retains_authored_minimum_before_role_reduction():
     r = record(repetitions=[4, 6], allow_fewer_repetitions=True)
     r["prescription"]["allowed_variants"] = [
         {"repetitions": n, "sets": 1, "work": {"unit": "seconds", "range": [240, 240]}}
@@ -49,7 +49,11 @@ def test_selected_standard_is_not_source_range_maximum_and_reductions_are_whole(
     assert resolved["status"] == "READY"
     assert resolved["standard_work_seconds"] == 4 * 240
     assert resolved["maximum_work_seconds"] == 6 * 240
-    assert resolved["work_options_seconds"] == [240, 480, 720, 960, 1200, 1440]
+    assert resolved["work_options_seconds"] == [960, 1200, 1440]
+    assert resolved["source_work_options_seconds"] == [960, 1200, 1440]
+    assert resolved["source_minimum_repetitions"] == 4
+    assert resolved["source_minimum_work_seconds"] == 960
+    assert resolved["role_reduction_allowed"] is True
     assert 960 * .6 not in resolved["work_options_seconds"]
     assert 960 * .9 not in resolved["work_options_seconds"]
 
@@ -138,3 +142,18 @@ def test_explicit_coach_repetition_range_keeps_its_minimum_and_source_identity()
     assert resolved["standard_work_seconds"] == 480
     assert resolved["work_options_seconds"] == [480, 720]
     assert resolved["source_count_policy"] == "EXPLICIT_COACH_REPEAT_RANGE"
+    assert resolved["source_minimum_repetitions"] == 2
+    assert resolved["source_minimum_work_seconds"] == 480
+    assert resolved["role_reduction_allowed"] is False
+
+
+def test_personal_hr_selection_keeps_its_minimum_even_with_legacy_numeric_override():
+    source = record(allow_fewer_repetitions=True, minimum_repetitions=1)
+    source["personal_variant"] = {"scope": "ATHLETE", "base_method_id": "BASE-HR4"}
+    profile = {"sport": "Run", "method_library": {"overrides": {"HR4": {"repetitions": [1, 99]}}}}
+    resolved = method_hr.resolve(source, profile, view())
+    assert resolved["status"] == "READY"
+    assert resolved["source_minimum_repetitions"] == 4
+    assert resolved["source_minimum_work_seconds"] == 960
+    assert resolved["work_options_seconds"] == [960]
+    assert resolved["role_reduction_allowed"] is False

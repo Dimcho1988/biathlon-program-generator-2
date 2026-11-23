@@ -26,7 +26,8 @@ def test_upper_source_variant_preserves_nonuniform_distance_cycles():
 def test_rounded_building_dose_still_rejects_extra_repetitions_and_lower_recovery():
     method = {'id':'TEST-Z4', 'zone':'Z4', 'structure':'MODEL_INTERVALS',
               'min_work_min':3., 'max_work_min':30., 'interval_template':{
-                  'work_seconds':180., 'recovery_seconds':90., 'total_capacity_ratio':2.5}}
+                  'work_seconds':180., 'recovery_seconds':90., 'total_capacity_ratio':2.5,
+                  'min_repetitions':1, 'max_repetitions':10}}
     evidence = {'capacity_minutes':12., 'readiness_policy':{'observed_dose_factor':.8}}
     profile = {'building_fraction':.65}
     fraction = engine._nominal_fraction(method, 'BUILDING', profile, 'GENERAL_PREPARATION', evidence, {})

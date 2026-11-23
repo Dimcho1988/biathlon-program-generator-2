@@ -160,8 +160,10 @@ def test_interval_maintenance_nominal_preserves_whole_efforts_without_generic_fl
     minimum = engine._minimum_work(method, evidence, Repository().settings)
     blocks = engine._blocks(method, work, evidence, Repository().settings)
     assert minimum == 6.  # Two whole V5-protocol repetitions; no generic Tmax floor.
-    assert fraction == .78  # 60% of the developmental method dose.
+    assert fraction == pytest.approx(18.*.6/34.)  # 60% after the six-effort ceiling.
     assert work >= minimum
-    assert [block["duration_min"] for block in blocks if block["kind"] == "WORK"] == [3.]*8
+    # The remaining role budget cannot expand the authored six-repeat maximum.
+    assert method["authored_interval_bounds"]["max_repetitions"] == 6
+    assert [block["duration_min"] for block in blocks if block["kind"] == "WORK"] == [3.]*3
     assert engine._dose_usage(blocks, evidence, "Z4") <= .5*evidence["readiness_dose_factor"]
     assert fraction <= method["interval_template"]["total_capacity_ratio"]

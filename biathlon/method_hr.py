@@ -9,7 +9,7 @@ from bisect import bisect_right
 from copy import deepcopy
 import math
 
-VERSION = "source-native-hrmax-method-v1"
+VERSION = "source-native-hrmax-method-v2-source-execution-minimums"
 
 
 def _number(value):
@@ -123,6 +123,8 @@ def resolve(record, profile, speed_view=None, *, phase=None, prescription=None):
             raise ValueError("HR_COMPOUND_PROTOCOL_REQUIRES_EXPLICIT_IMPLEMENTATION")
         hrmax, bounds = _settings(profile, speed_view)
         override = ((profile.get("method_library") or {}).get("overrides") or {}).get(record["id"], {})
+        if record.get("personal_variant"):
+            override = {k: v for k, v in override.items() if k == "enabled"}
         standard = deepcopy(p.get("selected_standard_variant") or p.get("standard_variant") or {})
         if standard.get("work"):
             p["work"] = deepcopy(standard["work"])
@@ -144,9 +146,6 @@ def resolve(record, profile, speed_view=None, *, phase=None, prescription=None):
         standard_work = cycle * reps * count
         if p.get("structure") == "CONTINUOUS" and (reps != 1 or count != 1):
             raise ValueError("CONTINUOUS_PROTOCOL_IS_ONE_WORK_BLOCK")
-        minimum_reps = execution_reps[0]
-        if p.get("allow_fewer_repetitions") and override.get("repetitions") is None:
-            minimum_reps = _count(p.get("minimum_repetitions", 1), "MINIMUM_REPETITIONS")
         # Alternatives are coupled. Only variants using this selected interval,
         # intensity and set count can be represented by this executable card.
         variants = p.get("allowed_variants") or []
@@ -163,8 +162,8 @@ def resolve(record, profile, speed_view=None, *, phase=None, prescription=None):
             allowed_counts = set(range(execution_reps[0], execution_reps[1] + 1))
         elif not variants:
             allowed_counts.update(range(execution_reps[0], execution_reps[1] + 1))
-        if p.get("allow_fewer_repetitions"):
-            allowed_counts.update(range(minimum_reps, reps + 1))
+        # Keep the complete source recipe here. The planner may apply a
+        # declared role/readiness reduction once, preserving work and rests.
         options = sorted(cycle * count * n for n in allowed_counts)
         if not options:
             raise ValueError("NO_COMPLETE_SOURCE_VARIANT")
@@ -193,6 +192,12 @@ def resolve(record, profile, speed_view=None, *, phase=None, prescription=None):
             "automatic_selection_enabled": automatic, "requires_coach_activation": not automatic,
             "segments": [segment], "components": sorted(components),
             "repetitions": [min(allowed_counts), max(allowed_counts)], "sets": count,
+            "source_minimum_repetitions": min(allowed_counts),
+            "source_minimum_work_seconds": segment["work_duration_range_seconds"][0] if continuous else options[0],
+            "source_work_options_seconds": None if continuous else deepcopy(options),
+            "role_reduction_allowed": bool(p.get("allow_fewer_repetitions")
+                and override.get("repetitions") is None
+                and not record.get("personal_variant") and not continuous),
             "standard_variant": {**standard, "repetitions": reps, "sets": count, "work": deepcopy(p["work"])},
             "source_standard_variant": deepcopy(p.get("standard_variant")),
             "standard_work_seconds": standard_work,

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from apps.api import training_plan_engine as engine
-from biathlon import dosing_curve, method_library
+from biathlon import adaptive_methods, dosing_curve, method_library
 from tests.test_dosing_curve import BOUNDS, example
 from tests.api.test_training_plan_engine import TODAY, NOW
 from tests.api.test_load_progression import configured, observed
@@ -81,16 +81,20 @@ def test_ski_discipline_uses_rollerski_curve_and_never_calendar_fitness_uplift()
 
 def test_fixed_source_repeat_count_reduces_once_for_recovery(monkeypatch):
     method, evidence, _ = executable("R01", monkeypatch)
-    evidence["readiness_dose_factor"] = .5
+    evidence["readiness_policy"] = adaptive_methods.readiness_policy(
+        method, athlete(), {zone: 80. for zone in ("Z1", "Z2", "Z3", "Z4", "Z5", "STR")})
     fraction = engine._nominal_fraction(method, "BUILDING", {"building_fraction": .65},
                                         "GENERAL_PREPARATION", evidence, None)
-    work = evidence["capacity_minutes"] * fraction * .5
+    factor = evidence["readiness_dose_factor"]
+    assert factor == .9
+    work = evidence["capacity_minutes"] * fraction * factor
     blocks = engine._blocks(method, work, evidence, SETTINGS)
     repeats = [b for b in blocks if b["kind"] == "WORK"]
     assert repeats and len(repeats) == int(work*60/evidence["method_library"]["resolution"]["cycle_work_seconds"])
     assert sum(b["target_distance_m"] for b in repeats) == 1000*len(repeats)
     assert evidence["method_library"]["resolution"]["source_repetitions"] == [4, 4]
-    assert engine._dose_usage(blocks, evidence, method["zone"]) <= .5
+    assert len(repeats) == 3  # Four authored repetitions reduced once to whole units.
+    assert engine._dose_usage(blocks, evidence, method["zone"]) <= factor
 
 
 def test_continuous_source_uses_selected_standard_without_second_tmax_fraction(monkeypatch):
@@ -111,7 +115,8 @@ def test_no_source_repeat_count_does_not_manufacture_a_hundred_repeat_budget():
 
 def test_active_recovery_keeps_its_source_speed_anchor(monkeypatch):
     method, evidence, view = executable("R10", monkeypatch)
-    blocks = engine._blocks(method, 12.5, evidence, SETTINGS)
+    work_minutes = evidence["method_library"]["resolution"]["standard_work_seconds"] / 60
+    blocks = engine._blocks(method, work_minutes, evidence, SETTINGS)
     rests = [b for b in blocks if b["kind"] == "RECOVERY"]
     expected = .6 * dosing_curve.from_view(view).speed(360) * 3.6
     assert rests and len(rests) == len([b for b in blocks if b["kind"] == "WORK"])-1

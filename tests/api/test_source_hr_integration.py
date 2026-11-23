@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from biathlon import method_library, method_dosing
+from biathlon import adaptive_methods, method_library
 from biathlon.equivalence import equivalence_slope
 from biathlon.physiology import linear_equivalence_coefficient
 from apps.api import training_plan_engine as engine
@@ -85,8 +85,10 @@ def test_hr_maintenance_uses_selected_standard_once_then_whole_repetitions(monke
 
 def test_hr_building_recovery_reduces_work_once_and_preserves_intensity(monkeypatch):
     method, evidence, profile = adapter(monkeypatch)
+    evidence["readiness_policy"] = adaptive_methods.readiness_policy(
+        method, profile, {f"Z{i}": 80. for i in range(1, 6)})
     fraction = engine._nominal_fraction(method, "BUILDING", profile, "GENERAL_PREPARATION", evidence, {})
-    factor = method_dosing.recovery_factor({"allowed": True, "observed_dose_factor": .8}, "BUILDING")
+    factor = evidence["readiness_dose_factor"]
     assert factor == .9
     requested = evidence["capacity_minutes"] * fraction * factor
     assert requested == pytest.approx(14.4)

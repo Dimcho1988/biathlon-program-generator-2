@@ -384,8 +384,14 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
     if fixed:
         start = max(start, date.fromisoformat(candidate_window["start_date"]))
     locked = next((d for d in old["plan"]["days"] if d["date"] == today.isoformat() and d.get("session")), None)
-    if fixed or (day_action and day_action.date == today):
+    saved_structure = (old["plan"].get("input_snapshot", {}).get("rule_versions") or {}).get("method_structure")
+    current_structure = (frozen.get("rule_versions") or {}).get("method_structure")
+    structure_changed = bool(current_structure and saved_structure != current_structure)
+    if fixed or (day_action and day_action.date == today) or structure_changed:
         locked = None  # Independently check the candidate; never silently validate a frozen dose.
+        # A changed recipe contract must also correct today's unexecuted
+        # prescription. Recorded activity is still reconciled above and owns
+        # its slots/load in the engine; it is never regenerated as a workout.
     # A mutable legacy snapshot or a different reconciliation source keeps the
     # original fresh-before path. Captured immutable sources share one initial
     # phase; fresh post-calculation inputs still detect source changes.

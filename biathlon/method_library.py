@@ -14,7 +14,7 @@ from pathlib import Path
 from .method_anchors import primary_distance, resolve_speed as _anchor
 from . import method_dosing, dosing_curve, preliminary_capacity, speed_duration, speed_zones, method_progression, hr_speed
 
-VERSION = "training-method-library-v6-source-standard"
+VERSION = "training-method-library-v7-source-execution-minimums"
 CATALOG_PATH = Path(__file__).parent / "data" / "training_method_library.json"
 PHASE_POSITION = {"RE_ENTRY": 0., "GENERAL_PREPARATION": 0., "SPECIAL_PREPARATION": .5,
                   "PRECOMPETITION": 1., "COMPETITION": 1., "TRANSITION": 0.}
@@ -422,8 +422,9 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
             standard_seconds = work_options[0]
             repetitions = [1, 1]
         else:
-            if p.get("allow_fewer_repetitions") and override.get("repetitions") is None:
-                repetitions[0] = min(repetitions[0], p.get("minimum_repetitions", 1))
+            # Resolution is role-neutral: retain the authored complete recipe.
+            # A maintenance/readiness reduction is applied later, once the
+            # execution role is known, never from the remaining daily budget.
             if repetitions[1] < repetitions[0]:
                 raise ValueError("NO_COMPLETE_REPEAT_WITHIN_METHOD_BUDGET")
             allowed_counts = set(range(int(repetitions[0]), int(repetitions[1])+1))
@@ -434,8 +435,6 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
                     if v.get("sets", count) == count and v.get("work", p.get("work")) == p.get("work")
                     and v.get("speed_multiplier", p.get("speed_multiplier")) == p.get("speed_multiplier")
                     and isinstance(v.get("repetitions"), int) and not isinstance(v.get("repetitions"), bool)}
-                if p.get("allow_fewer_repetitions"):
-                    allowed_counts.update(range(int(repetitions[0]), standard_repetitions+1))
                 if standard_repetitions not in allowed_counts:
                     raise ValueError("NO_COMPLETE_STANDARD_VARIANT")
             if not allowed_counts:
@@ -443,6 +442,10 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
             repetitions = [min(allowed_counts), max(allowed_counts)]
             work_options = sorted(cycle * count * n for n in allowed_counts)
             minimum, maximum = work_options[0], work_options[-1]
+        role_reduction_allowed = bool(p.get("allow_fewer_repetitions")
+            and override.get("repetitions") is None
+            and not record.get("personal_variant")
+            and structure not in {"CONTINUOUS", "SCALED_SEQUENCE", "PROGRESSIVE_CONTINUOUS", "SEQUENCE"})
         recovery_resolution = None
         if recovery.get("anchor") or recovery.get("speed_multiplier"):
             recovery_resolution = _segment({"anchor": recovery.get("anchor", p.get("anchor")),
@@ -464,6 +467,10 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
                 "curve_model_version": getattr(curve, "model_version", speed_view.get("model_version")),
                 "segments": segments, "components": sorted({s["zone"] for s in segments} | ({recovery_resolution["zone"]} if recovery_resolution else set())),
                 "repetitions": [int(v) for v in repetitions], "sets": count,
+                "source_minimum_repetitions": int(repetitions[0]),
+                "source_minimum_work_seconds": minimum,
+                "source_work_options_seconds": deepcopy(work_options),
+                "role_reduction_allowed": role_reduction_allowed,
                 "recovery_seconds": sum(rests)/2, "recovery_range_seconds": rests,
                 "recovery_type": recovery.get("type", "UNSPECIFIED"), "recovery_mode_hint": recovery.get("mode_hint"), "set_recovery_seconds": sum(set_rest)/2, "set_recovery_type": sets.get("recovery_type", recovery.get("type", "UNSPECIFIED")),
                 "minimum_work_seconds": minimum, "maximum_work_seconds": maximum,
