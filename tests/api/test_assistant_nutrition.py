@@ -138,6 +138,11 @@ def test_nutrition_payload_fits_budget_with_large_training_evidence_without_netw
     payload = provider._payload(messages, metadata, {"read": ["energy", "day"]})
     assert len(json.dumps(payload, ensure_ascii=False).encode()) < 64 * 1024
     assert "Текущото искане е за хранене" in payload["instructions"]
+    schema = payload["tools"][0]["parameters"]["properties"]
+    assert schema["query"]["properties"]["kind"]["enum"] == ["energy", "day"]
+    assert schema["query"]["properties"]["input_kind"] == {"type": "null"}
+    assert schema["command"] == {"type": "null"}
+    assert "MANAGEMENT_PROFILE" not in payload["instructions"]
 
 
 def test_menu_timeout_is_bounded_and_does_not_expand_unrelated_calls():
@@ -172,3 +177,22 @@ def test_longer_menu_timeout_respects_total_turn_deadline(repo, monkeypatch):
     result = service.turn(repo, ALIAS, ACTOR, body("Направи меню за днес"), provider)
     assert provider.calls == 1 and "2800 kcal" in result["message"]
     assert "Конкретното меню не е изготвено" in result["message"]
+
+
+def test_unknown_nutrition_form_is_recovered_without_reading_or_writing_it(repo):
+    repo.read_result = energy()
+    provider = ScriptedAssistantProvider([
+        {"text": "", "query": query("energy", date=DAY)},
+        {"text": "", "query": query("inputs", input_kind="NUTRITION")},
+        {"text": "Примерно меню според прочетената цел."}])
+    result = service.turn(repo, ALIAS, ACTOR, body("Повтори менюто за днес"), provider)
+    assert [q["kind"] for q in repo.reads] == ["energy"]
+    assert provider.calls[-1]["context"]["query_feedback"]["status"] == "UNSUPPORTED_NUTRITION_READ"
+    assert "Примерно меню" in result["message"] and not repo.writes
+
+
+def test_nutrition_tool_schema_cannot_grant_plan_access():
+    provider = OpenAIAssistantProvider(OpenAIProviderConfig(api_key="unused-test-key"))
+    payload = provider._payload([{"role": "user", "content": "Искам меню"}],
+        {"answer_focus": "nutrition", "read_only_turn": True}, {"read": ["energy", "inputs"], "write": []})
+    assert payload["tools"][0]["parameters"]["properties"]["query"]["properties"]["kind"]["enum"] == ["energy"]

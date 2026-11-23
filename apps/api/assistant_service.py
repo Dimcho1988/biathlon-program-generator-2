@@ -1054,6 +1054,8 @@ def turn(repository,alias,actor,body,provider=None):
                     break
                 synthesis_only=step==3
                 capabilities=_capabilities(_permissions(repository,alias,actor))
+                if nutrition_turn:
+                    capabilities={"read":[kind for kind in capabilities["read"] if kind in {"energy","day"}],"write":[]}
                 read_input_kinds={item.get("input_kind") or item.get("kind") for item in contexts
                     if item.get("query_kind")=="inputs" and type(item.get("revision")) is int}
                 final_command_allowed=bool(synthesis_only and input_request
@@ -1115,6 +1117,10 @@ def turn(repository,alias,actor,body,provider=None):
                     break
                 if reply.get("query"):
                     requested=reply["query"]
+                    if nutrition_turn and isinstance(requested,dict) and requested.get("kind") not in capabilities["read"]:
+                        query_feedback={"status":"UNSUPPORTED_NUTRITION_READ",
+                            "instruction":"Use energy for targets/preferences and day for training timing. No separate nutrition input form exists. Answer from completed results if sufficient."}
+                        continue
                     query_key=json.dumps({k:v for k,v in requested.items() if v is not None}
                         if isinstance(requested,dict) else requested,sort_keys=True)
                     if query_key in query_keys:
