@@ -901,7 +901,7 @@ def turn(repository,alias,actor,body,provider=None):
     if not isinstance(message,str) or not message.strip() or len(message)>4000:
         raise HTTPException(422,"Въведи съобщение до 4000 знака.")
     message=message.strip()
-    nutrition_turn=assistant_nutrition.is_nutrition_request(message) and not _explicit_write_request(message)
+    nutrition_turn=assistant_nutrition.is_nutrition_request(message)
     operation=_uuid(body.get("operation_id"))
     conversation=_uuid(body["conversation_id"]) if body.get("conversation_id") else None
     start=_rpc(repository,"BEGIN",alias,actor,conversation,operation,{"message":message})
@@ -926,6 +926,9 @@ def turn(repository,alias,actor,body,provider=None):
             # never to one left behind by an unrelated conversation topic.
             state.pop("discussed_proposal",None)
         input_request=_input_request(state,message,now)
+        # "Направи/повтори меню" asks for an answer, not an application write.
+        # A resolved input contract still owns real planning/observation edits.
+        nutrition_turn=nutrition_turn and not input_request
         pending_change=state.get("pending_command")
         if normalized not in CONFIRM:
             # A correction needs a new preview; an unrelated question must not
@@ -1043,6 +1046,9 @@ def turn(repository,alias,actor,body,provider=None):
             context_reduced=False
             for step in range(4):
                 timeout=getattr(getattr(provider,"config",None),"timeout_seconds",20)
+                request_timeout=getattr(provider,"request_timeout",None)
+                if callable(request_timeout):
+                    timeout=request_timeout({"answer_focus":"nutrition" if nutrition_turn else None,"results":contexts})
                 if step and monotonic()-started+timeout+5>90:
                     result["message"]=_resolved_answer(contexts,input_request,nutrition=nutrition_turn)
                     break
@@ -1221,6 +1227,7 @@ def turn(repository,alias,actor,body,provider=None):
                     result["suggestions"]=["Умората ми е 2 от 5","Умората ми е 4 от 5","Отложи за утре","Не ме подсещай"]
                     state["last_nudge_day"]=local.date().isoformat()
     except AssistantProviderError as exc:
+        result["error_code"]=exc.code
         if exc.code == "budget_exhausted":
             result["message"]="Тестовият бюджет на ИИ асистента е изчерпан или спрян. Платените заявки са прекратени до изрично добавяне на нов кредит. Запазената програма и формулярите остават достъпни."
             result["error_code"]="budget_exhausted"
@@ -1253,7 +1260,9 @@ def turn(repository,alias,actor,body,provider=None):
                 result["message"]="Справката е твърде обемна за една заявка. Посочи конкретна дата или сесия, за да я разгледаме подробно. Не е потвърден нов запис."
             result["error_code"]="input_too_large"
         else:
-            if not input_request and _read_request(message):
+            if nutrition_turn and not input_request:
+                result["message"]=assistant_nutrition.render_targets(contexts or ([context] if context else []))
+            elif not input_request and _read_request(message):
                 result["message"]="Разговорният модел временно не отговаря. Можеш да повториш същия въпрос или да прегледаш запазената програма."
             else:
                 result["message"]="Разговорният модел временно не отговаря. Не е потвърден нов запис. Можеш да използваш формулярите и запазената програма."

@@ -60,6 +60,8 @@ def test_projection_retains_all_targets_preferences_provenance_and_training_dura
     "Не те питам за натоварването а за храненето",
     "Храненето а не програмата", "Исках хранителен режим за утре",
     "Какво да ям днес?",
+    "Направи меню за утре.",
+    "Храненето, а не програмата. Повтори менюто за 2026-11-23 кратко.",
 ])
 def test_nutrition_turn_uses_compact_results_and_has_no_training_nudge(repo, message):
     repo.read_result = lambda q: energy() if q["kind"] == "energy" else training()
@@ -75,15 +77,15 @@ def test_nutrition_turn_uses_compact_results_and_has_no_training_nudge(repo, mes
     assert len(repo.reads) == 2 and not repo.writes
 
 
-@pytest.mark.parametrize("failure", ["size", "read_budget"])
+@pytest.mark.parametrize("failure", ["size", "timeout", "read_budget"])
 def test_nutrition_failure_returns_targets_never_training_instructions(repo, failure):
     repo.read_result = lambda q: energy() if q["kind"] == "energy" else training()
     class Provider:
         calls = 0
         def complete(self, *args):
             self.calls += 1
-            if self.calls > 2 and failure == "size":
-                raise AssistantProviderError("input_too_large")
+            if self.calls > 2 and failure in {"size", "timeout"}:
+                raise AssistantProviderError("input_too_large" if failure == "size" else "timeout")
             return {"query": query("energy" if self.calls == 1 else "day", date=DAY)}
     result = service.turn(repo, ALIAS, ACTOR, body("Храненето а не програмата"), Provider())
     text = result["message"]
@@ -91,6 +93,8 @@ def test_nutrition_failure_returns_targets_never_training_instructions(repo, fai
     assert "Предварителна цел" in text and "Конкретното меню не е изготвено" in text
     assert "Интервали" not in text and "Седмична програма" not in text
     assert not repo.writes
+    if failure == "timeout":
+        assert result["error_code"] == "timeout"
 
 
 def test_pending_energy_and_available_plan_do_not_turn_food_request_into_training(repo):
@@ -134,3 +138,37 @@ def test_nutrition_payload_fits_budget_with_large_training_evidence_without_netw
     payload = provider._payload(messages, metadata, {"read": ["energy", "day"]})
     assert len(json.dumps(payload, ensure_ascii=False).encode()) < 64 * 1024
     assert "Текущото искане е за хранене" in payload["instructions"]
+
+
+def test_menu_timeout_is_bounded_and_does_not_expand_unrelated_calls():
+    provider = OpenAIAssistantProvider(OpenAIProviderConfig(api_key="unused-test-key"))
+    assert provider.request_timeout({}) == 20
+    assert provider.request_timeout({"answer_focus": "nutrition", "results": []}) == 20
+    assert provider.request_timeout({"answer_focus": "nutrition", "results": [energy()]}) == 40
+    assert provider.request_timeout({"results": [training()]}) == 20
+
+
+def test_explicit_observation_write_with_food_mention_keeps_its_contract(repo):
+    provider = ScriptedAssistantProvider([{"text": "Уточни самооценката."}])
+    service.turn(repo, ALIAS, ACTOR, body("Искам да запиша умората си след хранене."), provider)
+    context = provider.calls[0]["context"]
+    assert context["active_input_request"]["kind"] == "DAILY"
+    assert context["answer_focus"] is None
+
+
+def test_longer_menu_timeout_respects_total_turn_deadline(repo, monkeypatch):
+    repo.read_result = energy()
+    clock = iter([0, 50, 51])
+    monkeypatch.setattr(service, "monotonic", lambda: next(clock))
+    class Provider:
+        calls = 0
+        def request_timeout(self, context):
+            return 40 if context["results"] else 20
+        def complete(self, *args):
+            self.calls += 1
+            assert self.calls == 1, "No 40s call may start with only 40s left in the turn"
+            return {"query": query("energy", date=DAY)}
+    provider = Provider()
+    result = service.turn(repo, ALIAS, ACTOR, body("Направи меню за днес"), provider)
+    assert provider.calls == 1 and "2800 kcal" in result["message"]
+    assert "Конкретното меню не е изготвено" in result["message"]

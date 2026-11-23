@@ -659,6 +659,13 @@ class OpenAIAssistantProvider:
         self._client = client
         self._budget = budget
 
+    def request_timeout(self, context):
+        # A menu with portions/totals needs more output time than a short tool
+        # selector. The orchestrator uses this same bound within its 90s turn.
+        if context.get("answer_focus") == "nutrition" and context.get("results"):
+            return max(self.config.timeout_seconds, 40.0)
+        return self.config.timeout_seconds
+
     def _payload(self, messages: list[dict], context: dict, capabilities: dict) -> dict:
         if not isinstance(messages, list) or not isinstance(context, dict) or not isinstance(capabilities, dict):
             raise AssistantProviderError("invalid_input")
@@ -827,6 +834,7 @@ class OpenAIAssistantProvider:
         return payload
 
     def complete(self, messages: list[dict], context: dict, capabilities: dict) -> dict:
+        timeout_seconds = self.request_timeout(context)
         with timed_stage("assistant_payload"):
             payload = self._payload(messages, context, capabilities)
         # This funded pilot permits one exact model/tier/tariff. Selecting a
@@ -859,7 +867,7 @@ class OpenAIAssistantProvider:
                 with client.stream(
                     "POST", _RESPONSES_URL, json=payload,
                     headers={"Authorization": "Bearer " + self.config.api_key, "Content-Type": "application/json"},
-                    timeout=httpx.Timeout(self.config.timeout_seconds),
+                    timeout=httpx.Timeout(timeout_seconds),
                     follow_redirects=False,
                 ) as response:
                     if response.status_code in {401, 403}:
@@ -869,7 +877,7 @@ class OpenAIAssistantProvider:
                     body = bytearray()
                     for chunk in response.iter_bytes():
                         body.extend(chunk)
-                        if time.monotonic() - started > self.config.timeout_seconds:
+                        if time.monotonic() - started > timeout_seconds:
                             raise AssistantProviderError("timeout")
                         if len(body) > _MAX_RESPONSE_BYTES:
                             raise AssistantProviderError("invalid_response")
