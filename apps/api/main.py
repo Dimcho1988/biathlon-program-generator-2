@@ -7,6 +7,7 @@ from .http_runtime import lifespan
 from .request_metrics import RequestMetricsMiddleware
 from .routes import (
     app_guide,
+    chatgpt_oauth,
     assistant,
     learning,
     management,
@@ -28,6 +29,7 @@ app.add_middleware(RequestMetricsMiddleware)
 
 ROUTE_MODULES = (
     app_guide,
+    chatgpt_oauth,
     assistant,
     learning,
     management,

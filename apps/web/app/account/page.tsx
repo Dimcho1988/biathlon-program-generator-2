@@ -6,6 +6,7 @@ import { currentAthleteAlias } from "../../lib/athlete-session";
 import { PasswordSettings } from "../../components/password-settings";
 
 const notices: Record<string, string> = {
+  "chatgpt-revoked": "Достъпът на ChatGPT е прекратен.",
   profile: "Името е запазено.",
   organization: "Отборът е създаден и профилът „Главен треньор“ е активен.",
   invite: "Поканата е създадена.",
@@ -45,6 +46,9 @@ export default async function AccountPage({ searchParams }: { searchParams: Prom
       unlinkedAthleteAlias={activeAthleteAlias && !activeAthleteAccessible ? activeAthleteAlias : null}
     />
     <PasswordSettings />
+    {process.env.ONFLOWS_API_BASE_URL?.includes("staging") && <form method="post" action="/api/integrations/chatgpt">
+      <button type="submit" name="decision" value="revoke">Прекрати всички връзки с ChatGPT</button>
+    </form>}
     <div className="account-actions"><Link href="/">Към приложението</Link><form method="post" action="/api/auth/logout"><button type="submit">Изход от това устройство</button></form></div>
   </section></main>;
 }

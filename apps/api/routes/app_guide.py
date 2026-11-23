@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import APIRouter
+from .. import chatgpt_tools
+from . import chatgpt_oauth
 from mcp import types
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -14,7 +16,8 @@ INSTRUCTIONS = (
     "При въпрос за хранене търси дневната хранителна цел. "
     "Представяй моделните оценки и прогнозите като такива. "
     "Съобщавай за извършена промяна само при потвърден запис от приложението. "
-    "Този инструмент предоставя единствено описание на приложението."
+    "При назован спортист провери get_connected_athlete и изпълни заявката само ако името съвпада. "
+    "get_app_guide предоставя обща информация. Личните инструменти работят само за спортиста, избран при свързване."
 )
 GUIDE_FILE = Path(__file__).resolve().parents[1] / "onflows_guide.md"
 
@@ -40,6 +43,9 @@ async def guide_lifespan(app):
         meta={"securitySchemes": [{"type": "noauth"}]}, structured_output=False)
     def get_app_guide() -> str:
         return guide
+
+    if chatgpt_oauth.enabled():
+        chatgpt_tools.register(server)
 
     transport = server.streamable_http_app()
     async with server.session_manager.run():
