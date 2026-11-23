@@ -2,8 +2,8 @@
 import math
 from copy import deepcopy
 
-VERSION = "source-standard-and-native-method-tmax-v4-preserved-structure"
-STRUCTURE_VERSION = "authored-method-role-floor-v1"
+VERSION = "source-standard-and-native-method-tmax-v5-bounded-full-dose"
+STRUCTURE_VERSION = "authored-method-role-floor-v2-bounded-full-dose"
 DEFAULT_SPEED_TOLERANCE = .02
 DEFAULT_HR_TOLERANCE = 3.
 DOSE_CONTROLS = {"total_capacity_ratio", "speed_tolerance_fraction", "hr_tolerance_bpm"}

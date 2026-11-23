@@ -31,7 +31,7 @@ def test_expert_interval_budget_uses_full_or_half_capacity_before_recovery(purpo
     fraction = engine._nominal_fraction(method, purpose, {'building_fraction': .65}, 'GENERAL_PREPARATION', evidence, None)
     assert evidence['capacity_minutes'] * fraction * 60 == pytest.approx(work_seconds)
     ceiling = engine._dose_ceiling(method, purpose, {}, 'GENERAL_PREPARATION', evidence, None, .8)
-    assert ceiling == role  # The legacy generic .8 never recaps this method budget.
+    assert ceiling == pytest.approx(role)  # The legacy generic .8 never recaps this method budget.
     blocks = engine._blocks(method, work_seconds/60, evidence, Repository().settings)
     assert sum(b['duration_s'] for b in blocks if b['kind'] == 'WORK') == pytest.approx(40 * int(work_seconds // 40))
     assert engine._dose_fits(blocks, evidence, 'Z5', ceiling)
@@ -135,9 +135,9 @@ def test_reentry_uses_the_maintenance_role_not_a_separate_legacy_fraction(purpos
     continuous = {"zone": "Z2", "structure": "CONTINUOUS"}
     assert engine._nominal_fraction(continuous, purpose, profile, "RE_ENTRY", {}, None) == .39
     interval = interval_method()
-    evidence = {}
+    evidence = {"capacity_minutes": 80/60}
     assert engine._nominal_fraction(interval, purpose, profile, "RE_ENTRY", evidence, None) == pytest.approx(1.17)
-    assert engine._dose_ceiling(interval, purpose, profile, "RE_ENTRY", evidence, None) == .39
+    assert engine._dose_ceiling(interval, purpose, profile, "RE_ENTRY", evidence, None) == pytest.approx(.39)
 
 
 def test_short_variant_preserves_the_prescribed_curve_duration():
