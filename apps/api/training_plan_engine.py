@@ -3762,6 +3762,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 while blocks and not _dose_fits(blocks, evidence, z, max_usage, tolerance=1e-6) and work >= method["min_work_min"]:
                     work = _previous_work(method, work)
                     blocks = _blocks(method, work, evidence, settings) if work >= method["min_work_min"] else []
+                if not blocks:
+                    item["rejected_alternatives"].append({"method_id": method["id"], "code": "INSUFFICIENT_DOSE_BUDGET",
+                        "reason": "Индивидуалната доза за текущата роля не допуска минималната цяла структура на метода."})
+                    continue
                 evidence.update(max_dose_fraction=max_usage*evidence.get("whole_dose_rounding_factor", 1.),
                     dose_capacity_basis=evidence.get("dose_capacity_basis", "WHOLE_STRUCTURE_WORK_CAPACITY"))
                 intensity_contract = _daily_intensity_contract(method, evidence, profile, purpose, controls,
