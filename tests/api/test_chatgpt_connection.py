@@ -83,6 +83,8 @@ def test_oauth_browser_to_pkce_exchange(monkeypatch):
         assert client.post(endpoint,json=body).status_code == 401
         bad = {**body,"params":{**params,"redirect_uri":"https://invalid.example"}}
         assert client.post(endpoint,headers=headers,json=bad).status_code == 400
+        write_alone = {**body, "params": {**params, "scope": oauth.WRITE}}
+        assert client.post(endpoint, headers=headers, json=write_alone).status_code == 400
         result=client.post(endpoint,headers=headers,json=body)
         callback=parse_qs(urlsplit(result.json()["location"]).query)
         assert callback["state"] == ["opaque-state"] and callback["iss"] == [oauth.ISSUER]

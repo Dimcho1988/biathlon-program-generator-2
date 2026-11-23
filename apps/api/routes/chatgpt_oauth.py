@@ -90,7 +90,7 @@ def validate_authorization(params):
             or len(params.get("state", "")) > 2048):
         raise HTTPException(400, "Невалидна заявка за свързване с ChatGPT.")
     scopes = set(params.get("scope", READ).split())
-    if not scopes or scopes - {READ, WRITE}:
+    if READ not in scopes or scopes - {READ, WRITE}:
         raise HTTPException(400, "Неподдържани права.")
     return scopes
 
