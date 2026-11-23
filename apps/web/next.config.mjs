@@ -4,7 +4,7 @@ const nextConfig = {
   async headers() {
     return [{ source: "/connect/chatgpt", headers: [
       { key: "Content-Security-Policy", value: "frame-ancestors 'none'; form-action 'self' https://chatgpt.com" },
-      { key: "Referrer-Policy", value: "no-referrer" },
+      { key: "Referrer-Policy", value: "strict-origin" },
       { key: "X-Frame-Options", value: "DENY" },
     ] }];
   },
