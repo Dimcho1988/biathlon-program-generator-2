@@ -582,7 +582,10 @@ def read(repository, alias, access, query, now=None, *, actor=None):
             raise HTTPException(403, "Нямаш достъп до данните на този спортист.")
         from .assistant_navigation import read as navigation
         return {"schema_version": VERSION, "query_kind": "navigation", **navigation(access, query.get("key") or "")}
-    if query["kind"] == "management" and query.get("view") == "sync-state":
+    if query["kind"] == "management" and query.get("view") == "diagnostics":
+        _require(access, "can_view_plan")
+        _require(access, "can_view_recovery")
+    elif query["kind"] == "management" and query.get("view") == "sync-state":
         _require_app_input(access, "SYNC_DATA")
     elif query["kind"] == "inputs" and query.get("input_kind") in APP_COMMAND_KINDS:
         _require_app_input(access, query["input_kind"])

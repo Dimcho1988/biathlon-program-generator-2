@@ -173,8 +173,13 @@ def _activities(repository, alias, query, today, parse_date):
 
 def _management(repository, alias, access, query, today, parse_date, actor):
     view = query.get("view") or "overview"
-    if view not in {"overview", "strategy", "week", "profile", "outlook", "active", "drafts", "draft-metadata", "state", "checks", "speed-comparison", "generation-jobs", "race-duration", "sync-state"}:
+    if view not in {"overview", "strategy", "week", "profile", "outlook", "active", "drafts", "draft-metadata", "state", "checks", "speed-comparison", "generation-jobs", "race-duration", "sync-state", "diagnostics"}:
         raise HTTPException(422, "Неподдържан изглед на програмата.")
+    if view == "diagnostics":
+        if access.get("can_view_plan") is not True or access.get("can_view_recovery") is not True:
+            raise HTTPException(403, "Нямаш достъп до основанията за тренировъчната доза.")
+        from .assistant_plan_diagnostics import read as diagnostics
+        return diagnostics(repository, alias, query)
     if view == "strategy":
         from .assistant_strategy import compact_management, current_calendar_plan, _events, _profile
         from .assistant_read_projection import project_management, project_profile

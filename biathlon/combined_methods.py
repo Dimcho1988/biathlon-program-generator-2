@@ -1,7 +1,7 @@
 """Two complete method parts may share a slot to cover remaining components."""
-from copy import deepcopy
 from hashlib import sha256
 import math
+from .recipe_copy import copy_recipe
 
 VERSION = 'combined-methods-v4-component-opportunities'
 
@@ -57,7 +57,7 @@ def candidates(candidates, evidence):
                         'title': first['title']+' + '+second['title'], 'zone': zone,
                         'sports': (sport,), 'periods': tuple(sorted(common)), 'purpose': 'BUILDING',
                         'structure': 'COMBINED_METHODS', 'position': first['position'],
-                        'combined_methods': deepcopy([first, second]), 'combination_shortage': deepcopy(evidence),
+                        'combined_methods': copy_recipe([first, second]), 'combination_shortage': copy_recipe(evidence),
                         'min_work_min': .5, 'max_work_min': first['max_work_min'],
                         'warmup_min': max(first['warmup_min'], second['warmup_min']),
                         'cooldown_min': max(first['cooldown_min'], second['cooldown_min']),

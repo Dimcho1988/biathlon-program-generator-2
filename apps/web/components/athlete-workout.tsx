@@ -7,6 +7,7 @@ import { phaseDose, phaseHeading, phaseIntensity, phaseName, recoveryCue, shortW
 import { useRunningSpeedUnit } from "./running-speed-unit";
 import { SessionRole } from "./session-role";
 import { SessionAccent, WorkoutProfile } from "./workout-profile";
+import { SessionMethodGuidance, sessionMethods } from "./session-method-guidance";
 
 function PhaseLine({phase, session, rest}: {phase: WorkoutPhase; session: DraftSession; rest?: boolean}) {
   const unit = useRunningSpeedUnit();
@@ -96,10 +97,6 @@ function whyToday(session: DraftSession, day: DraftDay) {
   else if (evidence?.selection?.accent === true || accents.includes(zone)) reasons.push("В този микроцикъл акцентът е върху " + component + ".");
   else if (["MAINTENANCE", "MAINTAIN", "SUPPORTING"].includes(role)) reasons.push("Днес е предвидена поддържаща доза за " + component + ".");
   else reasons.push("Тренировката разпределя част от планирания за микроцикъла обем за " + component + ".");
-  const budget = day.load_budget?.components?.[zone as keyof typeof day.load_budget.components];
-  if (budget?.prescription_basis === "LONG_TERM_MICROCYCLE_Q" && typeof budget.remaining_target_q === "number" && budget.remaining_target_q > 0) {
-    reasons.push("При разпределянето остават " + durationHms(budget.remaining_target_q) + " по Q до целта за " + componentLabel(zone) + ".");
-  }
   if (typeof evidence?.readiness_dose_factor === "number" && evidence.readiness_dose_factor < 1) {
     reasons.push("Планираният обем е намален според прогнозното възстановяване за деня.");
   }
@@ -129,6 +126,7 @@ export function AthleteWorkout({day, session, position}: {day: DraftDay; session
       </li>)}</ol>}
     {bank && !phases.some(p => p.block.exercise_id) && <ul>{bank.exercises.map(e => <li key={e.id}>{e.name} · {e.sets} × {e.reps} повторения</li>)}</ul>}
     <details className="athlete-workout-notes"><summary>Бележки за изпълнението</summary><ul>{executionNotes(session, phases).map(note => <li key={note}>{note}</li>)}</ul></details>
+    {(sessionMethods(session).length > 0 || bank || session.dose_evidence?.effort_anchor) && <details className="athlete-workout-notes"><summary>Метод, оригинал и източник</summary><SessionMethodGuidance session={session}/></details>}
     <details className="athlete-workout-notes"><summary>Защо тази тренировка сега?</summary><SessionRole session={session} day={day}/><p>{whyToday(session, day)}</p></details>
   </article>;
 }

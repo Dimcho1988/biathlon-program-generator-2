@@ -44,7 +44,7 @@
 .management-facts dt { color: var(--muted,#5b6e6b); font-size: .85rem; }
 .management-facts dd { margin: .25rem 0 0; font-weight: 600; overflow-wrap: anywhere; }
 .management-table-wrap { overflow-x: auto; }
-.plan-q-comparison td small { display: block; margin-top: .25rem; color: var(--muted,#5b6e6b); white-space: normal; }
+.plan-q-comparison td small, .plan-q-comparison th small { display: block; margin-top: .25rem; color: var(--muted,#5b6e6b); white-space: normal; }
 .plan-q-comparison > label { max-width: 26rem; }
 .plan-q-comparison details { margin-top: 1rem; overflow-x: auto; }
 .plan-q-comparison th { white-space: normal; }

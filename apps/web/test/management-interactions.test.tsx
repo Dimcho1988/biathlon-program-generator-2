@@ -150,25 +150,28 @@ it("saves explicit learning controls without resetting the planning profile", as
   expect(result.load_progression).toEqual(savedProfile.load_progression);
 });
 
-it("shows component shortfalls separately from session counts and elapsed duration", async () => {
+it("omits allocation diagnostics without substituting effective load for missing Q", async () => {
   const draft=parseDraftRecord({entry_key:"test",revision:1,payload:{schema_version:"planning-draft-v1",engine_version:"v6",status:"DRAFT",start_date:"2026-09-23",end_date:"2026-09-29",days:[],source:{},parameters:{},warnings:[],summary:{planned_minutes:0}}});
   await mount(<TrainingPlanSummary plan={{...draft.payload,allocation:{window_start:"2026-09-23",window_end:"2026-09-29",scheduled_slots:9,weekly_session_limit:13,components:{Z1:{target_effective:700,actual_effective:100,planned_effective:400,unallocated_effective:200}},constraints:[{code:"THRESHOLD_DAY_RESERVED",reason:"Този ден е избран за прагова работа."}],dose_limits:["METHOD_CAPACITY_FRACTION"]}}}/>);
-  expect(container.textContent).toContain("Остава непланиран товар: Z1");
-  expect(container.textContent).toContain("0 предложени сесии от 9 възможни по дните");
-  expect(container.textContent).toContain("Седмичен максимум в профила: 13");
-  expect(container.textContent).toContain("Приравнен обем от предложените сесии");
+  expect(container.textContent).toContain("Целта по Q е неизвестна");
+  expect(container.querySelectorAll("table")).toHaveLength(1);
+  expect(container.textContent).not.toContain("Остава непланиран товар");
+  expect(container.textContent).not.toContain("Седмичен максимум в профила");
+  expect(container.textContent).not.toContain("THRESHOLD_DAY_RESERVED");
+  expect(container.textContent).not.toContain("METHOD_CAPACITY_FRACTION");
   expect(container.textContent).not.toContain("700100400200");
-  expect(container.textContent).toContain("0:00:00");
+  expect(container.textContent).toContain("Няма съпоставима стойност");
 });
 
-it("shows the full current microcycle including past completed days and labels the next partial one", async () => {
+it("does not duplicate clock-time totals in the Q component comparison", async () => {
   const draft=parseDraftRecord({entry_key:"test",revision:1,payload:{schema_version:"planning-draft-v1",engine_version:"v32",status:"DRAFT",start_date:"2026-10-09",end_date:"2026-10-15",days:[],source:{},parameters:{},warnings:[],summary:{planned_minutes:463,volume_by_microcycle:[
     {start_date:"2026-10-06",end_date:"2026-10-12",through_date:"2026-10-12",complete_microcycle:true,actual_minutes:545,planned_minutes:302,total_minutes:847},
     {start_date:"2026-10-13",end_date:"2026-10-19",through_date:"2026-10-15",complete_microcycle:false,actual_minutes:0,planned_minutes:161,total_minutes:161}]}}});
   await mount(<TrainingPlanSummary plan={draft.payload}/>);
-  expect(container.textContent).toContain("14:07:00");
-  expect(container.textContent).toContain("9:05:00 изпълнено + 5:02:00 предложено");
-  expect(container.textContent).toContain("непълен микроцикъл");
+  expect(container.textContent).toContain("Приравнен обем Q в ч:мм:сс");
+  expect(container.textContent).not.toContain("14:07:00");
+  expect(container.textContent).not.toContain("9:05:00 изпълнено + 5:02:00 предложено");
+  expect(draft.payload.summary).toMatchObject({volume_by_microcycle:expect.any(Array)});
 });
 
 it("saves 16 sessions and double-threshold preferences directly from step two", async () => {
@@ -250,19 +253,42 @@ it("explains the actual daily session limit and restores automatic goals only af
   expect(saved.planning_controls.sessions_per_week).toBe(13);
 });
 
-const vector=Object.fromEntries(COMPONENTS.map(z=>[z,95]));
+const vector=Object.fromEntries(COMPONENTS.map(z=>[z,95])) as Record<(typeof COMPONENTS)[number],number>;
 const session=(title:string,minutes:number)=>({title,method_id:title,sport:"Run",zone:"Z1",purpose:"MAINTENANCE",main_work_minutes:minutes,total_minutes:minutes,canonical_effective_load:vector,direct_equivalent_minutes:vector,
   blocks:[{kind:"WORK",label:title,zone:"Z1",duration_min:minutes,target_hr_bpm:null,target_speed_kmh:null,repetition:null,instructions:"Леко и равномерно."}],
   dose_evidence:{capacity_source:"EXPERT_CONTINUOUS_TREF",capacity_minutes:120,target_hr_bpm:null,target_speed_kmh:null,fraction:.3,requested_work_minutes:minutes,prescribed_work_minutes:minutes,limits:[],fallback_reasons:[],model_version:"v5",explanation:"Общ дневен бюджет.",technical_spill_reference:vector}});
 const draft=parseDraftRecord({entry_key:"2026-09-22",revision:1,stale:true,payload:{schema_version:"planning-draft-v1",engine_version:"v5",status:"DRAFT",start_date:"2026-09-22",end_date:"2026-09-28",source:{},warnings:[],summary:{planned_minutes:75},
   days:[{date:"2026-09-22",status:"TRAINING",period:"GENERAL_PREPARATION",taper:false,explanation:"Две сесии с общ бюджет.",session:session("Сутрешна работа",45),sessions:[session("Сутрешна работа",45),session("Следобедна работа",30)],readiness_before:vector,readiness_after:vector,rejected_alternatives:[],load_budget:{remaining_weekly_minutes:null,components:Object.fromEntries(COMPONENTS.map(z=>[z,{e7_daily:0,e40_daily:1,index_7_40:1,target_weekly_effective:100,rolling_7d_effective:0,deficit_effective:100}]))}}]}});
 
-it("shows a restrictive manual goal outside the collapsed explanations, including frozen v5 plans",async()=>{
+it("links manual goals outside the collapsed explanations, including frozen v5 plans",async()=>{
   await mount(<TrainingPlanSummary plan={{...draft.payload,input_snapshot:{management_profile:{component_targets_weekly:{Z1:5}}}}}/>);
-  const warning=container.querySelector<HTMLElement>('aside[role="status"]')!;
-  expect(warning.textContent).toContain("Z1: 0:05:00 приравнено време / 7 дни");
-  expect(warning.closest("details")).toBeNull();
-  expect(warning.querySelector("a")?.getAttribute("href")).toBe("/planning");
+  const link=container.querySelector<HTMLAnchorElement>('a[href="/planning"]')!;
+  expect(link.parentElement?.textContent).toContain("Използват се ръчни цели");
+  expect(link.closest("details")).toBeNull();
+});
+
+it("shows the primary comparison and prescription while keeping sources on demand and diagnostics out",async()=>{
+  const current=structuredClone(draft);current.stale=false;
+  current.payload.parameters={internal_parameter:"INTERNAL_PARAMETER_SENTINEL"};
+  current.payload.days[0].rejected_alternatives=[{method_id:"REJECTED_METHOD_SENTINEL",reason:"REJECTED_REASON_SENTINEL",code:"INTERNAL_REJECTION"}];
+  const first=current.payload.days[0].sessions![0];
+  first.dose_evidence.explanation="DOSE_DIAGNOSTIC_SENTINEL";
+  first.method_library={id:"SOURCE-TEST",title:"Запазен метод",source:{authors:"Автор на източника",links:["https://example.org/original"]},original:{work:"3 × 4 мин"}};
+  const saved=structuredClone(current);
+  await mount(<TrainingManagement athleteName="Спортист" canEdit={false} initialProfile={{configured:true,profile,revision:2}} initialDrafts={[current]} today="2026-09-21"/>);
+  const comparison=container.querySelector('[aria-label="Цел, програма и изпълнение Q"]')!;
+  expect(comparison).toBeTruthy();expect(comparison.closest("details")).toBeNull();
+  expect(container.querySelector('[aria-label="Последователност и интензивност на тренировката"]')).toBeTruthy();
+  const original=container.querySelector<HTMLAnchorElement>('a[href="https://example.org/original"]')!;
+  const sourcePanel=original.closest<HTMLDetailsElement>("details")!;
+  expect(sourcePanel.querySelector("summary")?.textContent).toBe("Метод, оригинал и източник");
+  expect(sourcePanel.open).toBe(false);
+  expect(sourcePanel.querySelector('a[href="/methods?method=SOURCE-TEST"]')).toBeTruthy();
+  expect(sourcePanel.textContent).toContain("3 × 4 мин");
+  expect(container.querySelector("pre")).toBeNull();
+  for(const text of ["INTERNAL_PARAMETER_SENTINEL","REJECTED_METHOD_SENTINEL","REJECTED_REASON_SENTINEL","DOSE_DIAGNOSTIC_SENTINEL","Подробен треньорски отчет","Как е изчислен Q?"])
+    expect(container.textContent).not.toContain(text);
+  expect(current).toEqual(saved);
 });
 
 it("opens a stale draft without launching computation and preserves every session and their total", async () => {
@@ -311,13 +337,13 @@ it("labels one hour as a total ceiling, preserves it on save and clears it only 
   expect(JSON.parse(fetchMock.mock.calls[0][1].body).profile.planning_controls.weekly_target_hours).toBeNull();
 });
 
-it("shows a one-hour cap in automatic mode and explains actual time consuming it",async()=>{
+it("retains time-budget evidence without a second technical summary",async()=>{
   const parameters={availability_mode:"AUTO_HISTORY",planning_controls:{weekly_target_hours:1},time_budget:{start_date:"2026-09-21",end_date:"2026-09-27",period_limit_minutes:60,actual_minutes:75,planned_minutes:0,remaining_minutes:0,actual_excess_minutes:15}};
   await mount(<TrainingPlanSummary plan={{...draft.payload,days:[],summary:{planned_minutes:0},parameters}}/>);
-  expect(container.textContent).toContain("Лимит за време1:00:00максимум общо за 7 дни");
-  expect(container.textContent).not.toContain("Автоматично");
-  expect(container.textContent).toContain("изпълнено 1:15:00; предложено 0:00:00; оставащо време 0:00:00");
-  expect(container.textContent).toContain("Изпълненото вече надхвърля лимита");
+  expect(container.querySelectorAll("table")).toHaveLength(1);
+  expect(container.textContent).not.toContain("Лимит за време");
+  expect(container.textContent).not.toContain("AUTO_HISTORY");
+  expect(parameters.time_budget).toMatchObject({period_limit_minutes:60,actual_minutes:75,actual_excess_minutes:15});
 });
 
 it("shows the tighter time constraint and keeps long-term estimates distinct",async()=>{
@@ -338,11 +364,11 @@ it("shows the saved automatic plan during refresh and reconciles the completed s
   await mount(<TrainingManagement {...props} initialActive={initial} preparation={{status:"UPDATING",prepared_at:null,evaluated_on:"2026-09-20",reason:"DAY_CHANGED"}}/>);
   expect(container.textContent).toContain("Показана е последната налична програма");
   expect(container.querySelector('[aria-label="Цел, програма и изпълнение Q"]')).toBeTruthy();
-  expect(container.textContent).toContain("Текущ план · версия 31");
+  expect(container.querySelector('[aria-label="Активна тренировъчна програма"]')?.getAttribute("data-plan-revision")).toBe("31");
   expect(container.textContent).not.toContain("Утвърди предложението");
   const fresh=structuredClone(initial); fresh.active!.revision=32;fresh.active!.stale=false;
   await mount(<TrainingManagement {...props} initialActive={fresh}/>);
-  expect(container.textContent).toContain("Текущ план · версия 32");
+  expect(container.querySelector('[aria-label="Активна тренировъчна програма"]')?.getAttribute("data-plan-revision")).toBe("32");
   expect(container.textContent).not.toContain("Показана е последната налична програма");
 });
 
@@ -430,7 +456,7 @@ it("does not describe the currently displayed newer revision as unchanged when a
   await click(button("Обнови сега"));
   await mount(render(7));
   await act(async () => resolve(Response.json({ ...activeResponse(6), capabilities: { unchanged_checks: true }, action_result: unchangedReceipt })));
-  expect(container.textContent).toContain("Текущ план · версия 7");
+  expect(container.querySelector('[aria-label="Активна тренировъчна програма"]')?.getAttribute("data-plan-revision")).toBe("7");
   expect(container.textContent).toContain("Проверката на версия 6 приключи без промяна. Показана е текущата версия 7.");
   expect(container.textContent).not.toContain("Проверката приключи. Програмата остава без промяна.");
 });
@@ -487,7 +513,7 @@ it("disables conflicting actions during an explicit refresh and loads a concurre
   expect(fetchMock).toHaveBeenCalledTimes(2);
   await act(async()=>resolvePost(Response.json({error:"Conflict"},{status:409})));
   expect(fetchMock).toHaveBeenCalledTimes(3);
-  expect(container.textContent).toContain("Текущ план · версия 4");
+  expect(container.querySelector('[aria-label="Активна тренировъчна програма"]')?.getAttribute("data-plan-revision")).toBe("4");
   expect(container.textContent).toContain("Заредена е последната версия");
   expect(container.querySelector('[role="alert"]')).toBeNull();
   expect(button("Утвърди предложението")).toBeUndefined();
@@ -505,68 +531,66 @@ it("never automatically retries an approval after conflict or replaces a newer r
 });
 
 
-it("compares direct period volume with actual plus planned without counting cascade as coverage", async () => {
-  const draft=parseDraftRecord({entry_key:"test",revision:1,payload:{schema_version:"planning-draft-v1",engine_version:"v17",status:"DRAFT",start_date:"2026-09-23",end_date:"2026-09-29",days:[],source:{},parameters:{},warnings:[],summary:{planned_minutes:0}}});
-  await mount(<TrainingPlanSummary plan={{...draft.payload,allocation:{scheduled_slots:7,weekly_session_limit:7,components:{Z1:{basis:"DIRECT_Q",target:120,actual:20,planned:70,remaining:30,target_effective:500,actual_effective:100,planned_effective:400,unallocated_effective:0}},constraints:[],dose_limits:[]}}}/>);
-  expect(container.textContent).toContain("Остава непланиран товар: Z1");
-  const table=[...container.querySelectorAll("table")].find(t=>t.querySelector("caption")?.textContent?.startsWith("Покритие на целите за периода"))!;
-  expect(table.textContent).toContain("Изпълнено");
-  expect(table.textContent).toContain("Приравнен обем");
-  expect(table.textContent).toContain("2:00:00");
-  expect(table.textContent).toContain("0:30:00");
-  expect(table.textContent).toContain("75.0%");
+it("shows direct Q goal, prescribed work and actual work separately without substituting cascade", async () => {
+  const plan={...draft.payload,start_date:"2026-09-23",end_date:"2026-09-29",days:planDates("2026-09-23","2026-09-29").map((date,i)=>({...draft.payload.days[0],date,status:i===0?"TRAINING":"REST",session:null,sessions:i===0?[{...session("Работа",70),direct_equivalent_minutes:{...vector,Z1:70}}]:[]})),allocation:{components:{Z1:{basis:"DIRECT_Q" as const,target:120,actual:20,planned:70,remaining:30,target_effective:500,actual_effective:100,planned_effective:400,unallocated_effective:0}},constraints:[],dose_limits:[]}};
+  await mount(<TrainingPlanSummary plan={plan}/>);
+  const row=container.querySelector(".q-primary-table tbody tr")!;
+  const cells=[...row.querySelectorAll("td")].map(cell=>cell.textContent);
+  expect(cells[0]).toContain("2:00:00");
+  expect(cells[1]).toContain("1:10:00");expect(cells[1]).toContain("58.3%");
+  expect(cells[2]).toContain("0:20:00");expect(cells[2]).toContain("16.7%");
+  expect(row.textContent).not.toContain("75.0%");
+  expect(container.textContent).not.toContain("8:20:00");
 });
 
-it("keeps separate microcycle shortfalls visible when the whole-period totals cancel", async () => {
-  const draft=parseDraftRecord({entry_key:"segments",revision:1,payload:{schema_version:"planning-draft-v1",engine_version:"v30",status:"DRAFT",start_date:"2026-09-23",end_date:"2026-09-29",days:[],source:{},parameters:{volume_governor:"COMPONENT_7_40"},warnings:[],summary:{planned_minutes:0}}});
-  await mount(<TrainingPlanSummary plan={{...draft.payload,allocation:{
-    status:"LONG_TERM_SEGMENT_OBJECTIVES_WITH_PHYSIOLOGICAL_GATES",scheduled_slots:7,weekly_session_limit:7,
-    components:{Z1:{basis:"DIRECT_Q",target:120,actual:100,planned:20,remaining:0,target_effective:600,actual_effective:500,planned_effective:100,unallocated_effective:0}},
-    segments:[
-      {window_start:"2026-09-23",window_end:"2026-09-25",days:3,components:{Z1:{basis:"DIRECT_Q",target:60,actual:0,planned:20,remaining:40,target_effective:300,actual_effective:0,planned_effective:100,remaining_effective:200}}},
-      {window_start:"2026-09-26",window_end:"2026-09-29",days:4,components:{Z1:{basis:"DIRECT_Q",target:60,actual:100,planned:0,remaining:0,target_effective:300,actual_effective:500,planned_effective:0,remaining_effective:0,actual_exceeds_target:true,actual_effective_exceeds_target:true}}},
-    ],constraints:[],dose_limits:["ROLLING_Q_AND_7_40_BUDGET"],
-  }}}/>);
-  expect(container.textContent).toContain("Цели на дългосрочната програма");
-  expect(container.textContent).toContain("Остава непланиран товар: Z1");
-  const tables=[...container.querySelectorAll("table")].filter(t=>t.querySelector("caption")?.textContent?.startsWith("Дългосрочна цел"));
-  expect(tables).toHaveLength(2);
-  expect(tables[0].querySelector("caption")?.textContent).toContain("23.09.2026 г. – 25.09.2026 г.");
-  expect(tables[1].querySelector("caption")?.textContent).toContain("26.09.2026 г. – 29.09.2026 г.");
-  const firstCells=[...tables[0].querySelectorAll("tbody td")].map(cell=>cell.textContent);
-  expect(firstCells[4]).toBe("0:40:00");
-  expect(firstCells[6]).toBe("3:20:00");
-  expect(tables[1].textContent).toContain("Изпълненото е над целта");
-  expect(container.textContent).toContain("Остатъкът не се прехвърля между микроцикли");
-  expect(container.textContent).not.toContain("LONG_TERM_SEGMENT_OBJECTIVES_WITH_PHYSIOLOGICAL_GATES");
+it("switches between exact microcycles without combining their totals", async () => {
+  const plan={...draft.payload,start_date:"2026-09-23",end_date:"2026-09-29",days:planDates("2026-09-23","2026-09-29").map((date,i)=>({...draft.payload.days[0],date,status:i===0?"TRAINING":"REST",session:null,sessions:i===0?[{...session("Работа",20),direct_equivalent_minutes:{...vector,Z1:20}}]:[]})),allocation:{components:{Z1:{basis:"DIRECT_Q" as const,target:120,actual:100,planned:20}},segments:[
+    {window_start:"2026-09-23",window_end:"2026-09-25",days:3,components:{Z1:{basis:"DIRECT_Q" as const,target:60,actual:0,planned:20}}},
+    {window_start:"2026-09-26",window_end:"2026-09-29",days:4,components:{Z1:{basis:"DIRECT_Q" as const,target:60,actual:100,planned:0}}}
+  ],constraints:[],dose_limits:["ROLLING_Q_AND_7_40_BUDGET"]}};
+  await mount(<TrainingPlanSummary plan={plan}/>);
+  expect(container.querySelectorAll("table")).toHaveLength(1);
+  let row=container.querySelector(".q-primary-table tbody tr")!;
+  expect(row.textContent).toContain("33.3%");
+  expect(container.querySelector("caption")?.textContent).toContain("23.09.2026 – 25.09.2026");
+  await choose(select("Седмица"),"2026-09-26");
+  row=container.querySelector(".q-primary-table tbody tr")!;
+  expect(container.querySelector("caption")?.textContent).toContain("26.09.2026 – 29.09.2026");
+  expect(row.textContent).toContain("166.7%");
+  expect(row.textContent).not.toContain("33.3%");
   expect(container.textContent).not.toContain("ROLLING_Q_AND_7_40_BUDGET");
-  expect(container.textContent).not.toContain("ограничението по 7/40");
 });
 
-it("reports the deficient strength cycle even when another cycle exceeds its target", async () => {
-  await mount(<TrainingPlanSummary plan={{...draft.payload,days:[],allocation:{components:{},constraints:[],dose_limits:[],
+it("leaves strength feasibility calculations in the payload without rendering diagnostics", async () => {
+  const plan={...draft.payload,days:[],allocation:{components:{},constraints:[],dose_limits:[],
     strength_feasibility:{desired_q:200,attainable_upper_bound_q:220,session_quota:4,quota_bound_below_target:true,
       segments:[
         {window_start:"2026-09-08",window_end:"2026-09-14",desired_q:100,attainable_upper_bound_q:160,session_quota:2,quota_bound_below_target:false},
         {window_start:"2026-09-15",window_end:"2026-09-21",desired_q:100,attainable_upper_bound_q:60,session_quota:2,quota_bound_below_target:true},
-      ]}}}}/>);
-  expect(container.textContent).toContain("Силовата цел за 15.09.2026 г. – 21.09.2026 г.");
-  expect(container.textContent).toContain("лимит от 2 сесии");
-  expect(container.textContent).toContain("Горна граница за прекия силов товар: 1:00:00; желана цел: 1:40:00");
-  expect(container.textContent).not.toContain("Силовата цел за 8.09.2026");
+      ]}}};
+  const saved=structuredClone(plan);
+  await mount(<TrainingPlanSummary plan={plan}/>);
+  expect(container.textContent).not.toContain("Горна граница за прекия силов товар");
+  expect(container.textContent).not.toContain("лимит от 2 сесии");
+  expect(plan).toEqual(saved);
 });
 
-it("keeps the strength explanation available for older saved reports", async () => {
-  await mount(<TrainingPlanSummary plan={{...draft.payload,days:[],allocation:{components:{},constraints:[],dose_limits:[],
-    strength_feasibility:{desired_q:100,attainable_upper_bound_q:60,session_quota:2,quota_bound_below_target:true}}}}/>);
-  expect(container.textContent).toContain("Горна граница за прекия силов товар: 1:00:00; желана цел: 1:40:00");
+it("accepts older feasibility metadata without exposing it in the programme", async () => {
+  const plan={...draft.payload,days:[],allocation:{components:{},constraints:[],dose_limits:[],
+    strength_feasibility:{desired_q:100,attainable_upper_bound_q:60,session_quota:2,quota_bound_below_target:true}}};
+  await mount(<TrainingPlanSummary plan={plan}/>);
+  expect(container.textContent).toContain("Цел → планирано → изпълнено");
+  expect(container.textContent).not.toContain("Горна граница за прекия силов товар");
+  expect(plan.allocation.strength_feasibility.attainable_upper_bound_q).toBe(60);
 });
 
-it("does not imply that alternative schedules were tested when no replay ran", async () => {
-  await mount(<TrainingPlanSummary plan={{...draft.payload,days:[],allocation:{components:{},constraints:[],dose_limits:[],
-    search:{conclusion:"SEARCH_BUDGET_EXHAUSTED",alternatives:0,improved:false,hard_limit_proven:false}}}}/>);
-  expect(container.textContent).toContain("не е проверено алтернативно разпределение");
+it("does not expose search diagnostics or claim alternatives were tested", async () => {
+  const plan={...draft.payload,days:[],allocation:{components:{},constraints:[],dose_limits:[],
+    search:{conclusion:"SEARCH_BUDGET_EXHAUSTED",alternatives:0,improved:false,hard_limit_proven:false}}};
+  await mount(<TrainingPlanSummary plan={plan}/>);
+  expect(container.textContent).not.toContain("SEARCH_BUDGET_EXHAUSTED");
   expect(container.textContent).not.toContain("след проверените варианти");
+  expect(plan.allocation.search).toEqual({conclusion:"SEARCH_BUDGET_EXHAUSTED",alternatives:0,improved:false,hard_limit_proven:false});
 });
 
 it("distinguishes the visible week from the complete-cycle forecast and validates the tail", async () => {
@@ -581,10 +605,10 @@ it("distinguishes the visible week from the complete-cycle forecast and validate
   expect(() => parseDraftRecord({...rolling,payload:{...rolling.payload,lookahead_days:[{...fullTail[0],date:"2026-11-06"}]}})).toThrow();
   const draft=parseDraftRecord(record);
   await mount(<TrainingPlanSummary plan={draft.payload}/>);
-  expect(container.textContent).toContain("Цел за микроцикъла");
-  expect(container.textContent).toContain("План и прогнозно продължение");
-  expect(container.textContent).toContain("Прогнозно продължение до 26.10.2026 г.");
-  expect(container.textContent).toContain("преразглеждат при следващото обновяване");
+  expect(container.textContent).toContain("Цел по модела");
+  expect(container.textContent).toContain("Планирано · предложение + прогноза");
+  expect(container.textContent).toContain("График и цел: 20.10.2026 – 26.10.2026");
+  expect(container.textContent).toContain("преразглеждат при обновяване");
   expect(container.textContent).not.toContain("непълната седмица получава съответния дял");
   expect(draft.payload.days).toHaveLength(0);
   expect(()=>parseDraftRecord({...record,payload:{...record.payload,lookahead_days:[{...record.payload.lookahead_days[0],date:"2026-10-23"}]}})).toThrow();

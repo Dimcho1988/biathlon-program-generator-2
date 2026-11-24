@@ -24,6 +24,7 @@ from biathlon.method_dosing import continuous_building_fraction, continuous_main
 from biathlon.component_load import VERSION as COMPONENT_LOAD_VERSION, DOWNWARD_FACTORS, effective_upper_bound
 from biathlon.equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM, equivalence_slope
 from biathlon import speed_anchor_policy
+from biathlon.recipe_copy import copy_recipe
 from biathlon.periodization import build_periodization, reentry_dose_active
 from biathlon.physiology import _causal_tref, effective_from_direct_vector, linear_equivalence_coefficient
 from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VERSION, catalog, resolved_methods, method_family
@@ -38,8 +39,8 @@ from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 from . import plan_speed_comparison
 
-VERSION = "training-management-v80-bounded-full-method-dose"
-PARAMETER_VERSION = "management-parameters-v65"
+VERSION = "training-management-v81-protected-development-and-replay-reuse"
+PARAMETER_VERSION = "management-parameters-v66"
 MIN_AEROBIC_DOSE_FRACTION = 0.  # Native recipes own their structural minimum; no generic Tmax floor.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -770,7 +771,7 @@ def _blocks_impl(method, work, evidence, settings):
             # Each part owns one independent card, shared by its repetitions.
             # Copying its entire source/resolution for every block dominates
             # candidate trials without changing their load or instructions.
-            card = deepcopy(part.get("method_library") or part.get("method_card"))
+            card = copy_recipe(part.get("method_library") or part.get("method_card"))
             result.extend({**b, "combination_part": index+1, "parent_method_id": part["id"], "parent_method_card": card} for b in blocks if b["kind"] not in {"WARMUP", "COOLDOWN"})
         if method["cooldown_min"]:
             result.append(_block("COOLDOWN", "Общо разпускане", "Z1", method["cooldown_min"], easy,
@@ -865,14 +866,14 @@ def _blocks_impl(method, work, evidence, settings):
         library = evidence["method_library"]
         r = library["resolution"]
         if r["structure"] in {"SEQUENCE", "SCALED_SEQUENCE", "PROGRESSIVE_CONTINUOUS"}:
-            r = deepcopy(r)
+            r = copy_recipe(r)
             selected_work = _quantized_work(method, min(work, r["maximum_work_seconds"]/60)) * 60
             if selected_work + 1e-6 < r["minimum_work_seconds"]:
                 return []
             if r["structure"] == "SEQUENCE":
                 tail = r["tail_segment"]
                 n = round((selected_work-r["cycle_work_seconds"]) / tail["work_duration_seconds"])
-                r["segments"].extend(deepcopy(tail) for _ in range(n))
+                r["segments"].extend(copy_recipe(tail) for _ in range(n))
             else:
                 scale = selected_work / r["cycle_work_seconds"]
                 for segment in r["segments"]:
@@ -891,7 +892,7 @@ def _blocks_impl(method, work, evidence, settings):
             segment = r["segments"][0]
             b = _block("WORK", "Основна работа", segment["zone"], min(work, r["maximum_work_seconds"]/60),
                        segment.get("target_hr_bpm"), method["instructions"], speed=segment["target_speed_kmh"])
-            b.update(primary_control=segment.get("execution_control", "SPEED_AND_QUALITY"), method_library=deepcopy(library),
+            b.update(primary_control=segment.get("execution_control", "SPEED_AND_QUALITY"), method_library=copy_recipe(library),
                      hr_reference_range_bpm=segment.get("hr_reference_range_bpm"), hr_reference_basis=segment.get("hr_reference_basis"), hr_role=segment.get("hr_role"),
                      target_speed_range_kmh=segment["target_speed_range_kmh"],
                      duration_range_seconds=segment["work_duration_range_seconds"])
@@ -914,7 +915,7 @@ def _blocks_impl(method, work, evidence, settings):
                         b.update(duration_s=segment["work_duration_seconds"], duration_min=segment["work_duration_seconds"]/60)
                         b.update(primary_control=segment.get("execution_control", "SPEED_AND_QUALITY"), speed_basis="FLAT_EQUIVALENT",
                                  load_estimate="ZONE_UPPER_REFERENCE_NOT_MEASURED_HR",
-                                 method_library={"id": library["id"], "resolution": deepcopy(segment)},
+                                 method_library={"id": library["id"], "resolution": copy_recipe(segment)},
                                  target_speed_range_kmh=segment["target_speed_range_kmh"],
                                  duration_range_seconds=segment["work_duration_range_seconds"],
                                  hr_reference_range_bpm=segment.get("hr_reference_range_bpm"), hr_reference_basis=segment.get("hr_reference_basis"), hr_role=segment.get("hr_role"),
@@ -1582,7 +1583,9 @@ def _daily_intensity_contract(method, evidence, profile, purpose, controls, *, d
     capacities = evidence.get("combined_capacities") or [evidence]
     budgets = evidence.get("combined_budgets") or [{"role": purpose}]
     for index, (parent, capacity, budget) in enumerate(zip(parents, capacities, budgets)):
-        probe_method, probe = deepcopy(parent), deepcopy(capacity)
+        # Re-resolve only the mutable role budget. Source recipes, citations
+        # and speed-curve metadata are read-only and need no trial copy.
+        probe_method, probe = _copy_method_budget(parent), _copy_capacity_budget(capacity)
         probe_method["purpose"] = "BUILDING"
         probe["readiness_policy"] = {}
         probe["readiness_dose_factor"] = 1.
@@ -1842,6 +1845,35 @@ def _native_work_options(method, minimum, maximum):
             if method.get('structure') in {'MODEL_INTERVALS', 'METABOLIC_INTERVALS'} and interval.get('work_seconds')
             else .5)
     return (n*step for n in range(math.ceil(minimum/step-1e-9), math.floor(maximum/step+1e-9)+1))
+
+
+def _developmental_core(method, evidence, settings, *, purpose, minimum, maximum, blocks):
+    """Retain the smallest whole developmental dose within a legal candidate."""
+    probe = {"purpose": purpose, "zone": method["zone"], "dose_evidence": evidence}
+    def builds(parts):
+        return planning_development.is_developmental({**probe, "blocks": parts})
+    if not builds(blocks):
+        return None
+    minimum_parts = _blocks(method, minimum, evidence, settings)
+    if builds(minimum_parts):
+        return minimum, minimum_parts
+    lo, hi = minimum, maximum
+    for _ in range(20):
+        midpoint = (lo+hi)/2
+        if builds(_blocks(method, midpoint, evidence, settings)):
+            hi = midpoint
+        else:
+            lo = midpoint
+    # The passing search bound can sit microscopically above an exact repeat.
+    # Try that whole dose before rounding upward, which would add another
+    # repetition even when the lower variant already remains developmental.
+    work = _quantized_work(method, hi)
+    core = _blocks(method, work, evidence, settings)
+    if builds(core):
+        return work, core
+    work = _whole_work_at_most(method, hi, maximum)
+    core = _blocks(method, work, evidence, settings)
+    return (work, core) if builds(core) else (maximum, blocks)
 
 
 def _beneficial_q_variant(variants, remaining_q):
@@ -2727,7 +2759,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             combo["combined_work_limits"] = {p["zone"]: (planning_allocation.prescription_headroom(segment["components"][p["zone"]]) or 0.)*work_per_q[(sport, p["id"])]
                 for p in combo["combined_methods"] if p["zone"] in combo["combined_work_targets"]}
             combo["method_card"] = method_registry.coach_card(combo)
-            combo["method_card"]["components"] = [deepcopy(p.get("method_library") or p.get("method_card")) for p in combo["combined_methods"]]
+            combo["method_card"]["components"] = [copy_recipe(p.get("method_library") or p.get("method_card")) for p in combo["combined_methods"]]
         return candidates + combos, shortage
 
     def executable_key(d, forecast_ready, future_budget, future_q, future_segment):
@@ -3311,7 +3343,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
 
             reservation_contract = {}
             @lru_cache(maxsize=256)
-            def replay_reserved_future_work(candidate_q, candidate_e, required_dates, candidate_primary, candidate_count, candidate_minutes, return_key_sessions):
+            def replay_reserved_future_work(candidate_q, candidate_e, required_dates, candidate_primary, candidate_count, candidate_minutes):
                 candidate_q = dict(candidate_q) if candidate_q is not None else None
                 candidate_e = dict(candidate_e) if candidate_e is not None else None
                 reserved_rows = forecast_rows
@@ -3417,17 +3449,20 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         "sessions": [{"direct_equivalent_minutes": chosen["q"], "total_minutes":chosen["minutes"]}]})
                     for z, value in objective_load(chosen["q"], chosen["e"]).items():
                         objective_spent[z] += value
-                return selected_key_sessions if return_key_sessions else selected
+                return selected, selected_key_sessions
 
             def reserved_future_work(candidate_q=None, candidate_e=None, required_dates=None, candidate_primary=None, candidate_count=1, candidate_minutes=0., *, return_key_sessions=False):
                 # All causal history, slots, quotas and future options are
                 # fixed for this slot. Whole-dose trials often revisit the
                 # exact same Q/E bundle; reuse only that identical replay.
-                return replay_reserved_future_work(
+                replay = replay_reserved_future_work(
                     tuple(sorted(candidate_q.items())) if candidate_q is not None else None,
                     tuple(sorted(candidate_e.items())) if candidate_e is not None else None,
                     frozenset(required_dates) if required_dates is not None else None,
-                    candidate_primary, candidate_count, candidate_minutes, return_key_sessions)
+                    candidate_primary, candidate_count, candidate_minutes)
+                # Dates and their selected whole methods come from the same
+                # replay; choosing a projection must not repeat its simulation.
+                return replay[1 if return_key_sessions else 0] if replay is not None else None
 
             reservable_dates = reserved_future_work() if not limited else set()
             reserved_keys = reserved_future_work(return_key_sessions=True) if not limited else []
@@ -3813,24 +3848,13 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         # feasible building dose into several maintenance doses.
                         # Find the smallest whole developmental core within the
                         # already legal dose; this is not a new load allowance.
-                        probe = {"purpose": purpose, "zone": z, "dose_evidence": {
-                            **evidence, "base_fraction": base_fraction*_primary_work_share(method)}}
-                        def builds(parts):
-                            return planning_development.is_developmental({**probe, "blocks": parts})
-                        if builds(blocks):
-                            lo, hi = method["min_work_min"], work
-                            for _ in range(20):
-                                midpoint = (lo+hi)/2
-                                if builds(_blocks(method, midpoint, evidence, settings)):
-                                    hi = midpoint
-                                else:
-                                    lo = midpoint
-                            core_work = _whole_work_at_most(method, hi, work)
-                            core = _blocks(method, core_work, evidence, settings)
-                            if builds(core):
-                                cq, ce, _ = candidate_load(core, capacity=evidence)
-                                minimum_load = max(minimum_load, objective_load(cq, ce)[z])
-                                developmental_core = True
+                        core = _developmental_core(method,
+                            {**evidence, "base_fraction": base_fraction*_primary_work_share(method)},
+                            settings, purpose=purpose, minimum=method["min_work_min"], maximum=work, blocks=blocks)
+                        if core is not None:
+                            cq, ce, _ = candidate_load(core[1], capacity=evidence)
+                            minimum_load = max(minimum_load, objective_load(cq, ce)[z])
+                            developmental_core = True
                     remaining_slots = (planning_allocation.remaining_slots(opportunities[z], day, slot_index,
                         segment_keys=allocation_segments) if is_key else separate_slots)
                     # Use observed duration to spread work when there are
@@ -3978,8 +4002,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                             continue
                         _, _, work, blocks, direct, effective, technical = best_variant
                         limits.append({"code": "UPPER_WHOLE_Q_DOSE_IF_ADMISSIBLE", "limit_minutes": _round(work)})
-                after_rows = _add_forecast_session(forecast_rows, day, effective)
-                def recovery_conflict(candidate_rows, candidate_q, candidate_e, candidate_minutes, *, protect_future=True,
+                def recovery_conflict(candidate_q, candidate_e, candidate_minutes, *, protect_future=True,
                                       candidate_primary=z if is_key or is_strength else None,
                                       candidate_count=2 if method.get("double_threshold") else 1,
                                       first_quality=bool(period_objectives and z in {"Z3", "Z4", "Z5"}
@@ -3997,28 +4020,27 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         candidate_count=candidate_count, candidate_minutes=candidate_minutes) is None:
                         return "RESERVE_FUTURE_QUALITY_BUDGET", "Дозата използва необходимия Q/7–40 бюджет за бъдеща ключова или силова задача, включително загрявката и товара от по-високите и съседните зони. В текущия цикъл се защитава дозата според оставащата цел."
                     return None
-                conflict = recovery_conflict(after_rows, direct, effective, sum(b["duration_min"] for b in blocks))
+                conflict = recovery_conflict(direct, effective, sum(b["duration_min"] for b in blocks))
                 if conflict:
                     # A large optional dose failing a future readiness check
                     # does not mean its minimum complete variant must fail.
                     minimum_blocks = _blocks(method, method["min_work_min"], evidence, settings)
                     minimum_q, minimum_load, minimum_technical = candidate_load(minimum_blocks, capacity=evidence)
                     minimum_minutes = sum(b["duration_min"] for b in minimum_blocks)
-                    if minimum_blocks and not recovery_conflict(_add_forecast_session(forecast_rows, day, minimum_load), minimum_q, minimum_load, minimum_minutes):
+                    if minimum_blocks and not recovery_conflict(minimum_q, minimum_load, minimum_minutes):
                         lo, hi = method["min_work_min"], work
                         while hi-lo > .25:
                             midpoint = (lo+hi)/2
                             trial = _blocks(method, midpoint, evidence, settings)
                             trial_q, trial_load, _ = candidate_load(trial, capacity=evidence)
-                            if trial and not recovery_conflict(_add_forecast_session(forecast_rows, day, trial_load), trial_q, trial_load, sum(b["duration_min"] for b in trial)):
+                            if trial and not recovery_conflict(trial_q, trial_load, sum(b["duration_min"] for b in trial)):
                                 lo = midpoint
                             else:
                                 hi = midpoint
                         work = max(method["min_work_min"], _quantized_work(method, lo))
                         blocks = _blocks(method, work, evidence, settings)
                         direct, effective, technical = candidate_load(blocks, capacity=evidence)
-                        after_rows = _add_forecast_session(forecast_rows, day, effective)
-                        conflict = recovery_conflict(after_rows, direct, effective, sum(b["duration_min"] for b in blocks))
+                        conflict = recovery_conflict(direct, effective, sum(b["duration_min"] for b in blocks))
                         limits.append({"code": "FUTURE_QUALITY_RESERVATION_WORK_CAP", "limit_minutes": _round(work)})
                     elif conflict[0] == "RESERVE_FUTURE_QUALITY_BUDGET" and (is_key or is_strength) and minimum_blocks:
                         # A future opportunity must not cancel today's due,
@@ -4026,7 +4048,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         # preserve that future guess, shrinking today's legal
                         # dose has no benefit. Reconcile later opportunities
                         # against the complete selected dose instead.
-                        conflict = recovery_conflict(after_rows, direct, effective,
+                        conflict = recovery_conflict(direct, effective,
                             sum(b["duration_min"] for b in blocks), protect_future=False)
                         if not conflict and fits_component_budget(effective, direct):
                             evidence["future_reservation_relaxed_for_current_quality"] = True
@@ -4035,7 +4057,6 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 if conflict:
                     item["rejected_alternatives"].append({"method_id": method["id"], "code": conflict[0], "reason": conflict[1]})
                     continue
-                after = recovery_v2.simulate(after_rows, configs["zones"], target=day, include_details=False, include_deadlines=False, calculation_cache=recovery_calculation_cache)
                 total = sum(b["duration_min"] for b in blocks)
                 actual_work = sum(b["duration_min"] for b in blocks if b["kind"] == "WORK")
                 primary_share = _primary_work_share(method)
@@ -4190,8 +4211,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                                for part in {b.get("session_index", 1) for b in parts})):
                         return False
                     q, e, _ = candidate_load(parts, capacity=capacity)
-                    return (budget_check(e, q) and not conflict_check(
-                        _add_forecast_session(forecast_rows, day, e), q, e, sum(b["duration_min"] for b in parts)))
+                    return (budget_check(e, q) and not conflict_check(q, e, sum(b["duration_min"] for b in parts)))
                 choice_checks[(sport, method["id"])] = choice_check
                 choice_headroom[(sport, method["id"])] = headroom if not limited else None
                 if mixed:
@@ -4209,7 +4229,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                                 "direct_equivalent_minutes": {z: _round(v) for z, v in direct.items()},
                                 "method_library": deepcopy(method.get("method_library") or method.get("method_card")),
                                 "registry_version": method_registry.VERSION,
-                                "dose_evidence": evidence}, after_rows, after))
+                                "dose_evidence": evidence}, dict(effective)))
             if choices:
                 minimum_cores = {}
                 if period_objectives is not None:
@@ -4355,6 +4375,15 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     selected_work = selected_evidence.get("structure_work_budget_minutes", selected_evidence["primary_work_budget_minutes"])
                     selected_minimum = selected_evidence.get("minimum_structure_work_minutes", selected_evidence["minimum_primary_work_minutes"])
                     minimum_parts, minimum_q, minimum_e = minimum_cores[(session["sport"], session["method_id"])]
+                    if development_due and not session.get("double_threshold"):
+                        core = _developmental_core(selected_method, selected_evidence, settings,
+                            purpose=session["purpose"], minimum=selected_minimum,
+                            maximum=selected_work, blocks=session["blocks"])
+                        if core is not None:
+                            # Optional preparation cannot erase the real dose
+                            # whose developmental priority selected this method.
+                            selected_minimum, minimum_parts = core
+                            minimum_q, minimum_e, _ = candidate_load(minimum_parts, capacity=selected_evidence)
                     protected_q = {c: 0. for c in COMPONENTS}
                     protected_e = {c: 0. for c in COMPONENTS}
                     protected_components = []
@@ -4574,7 +4603,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     # the existing ranking among the other legal candidates.
                     bool(executable_quality and closes_easy_objective(c)),
                     not closes_easy_objective(c), -c[0], c[1]))
-                _, _, session, selected_rows, selected_after = choices[0]
+                _, _, session, selected_load = choices[0]
                 if period_objectives is not None:
                     bundle = bundles[(session["sport"], session["method_id"])]
                     selected_method, selected_evidence = bundle["method"], bundle["evidence"]
@@ -4654,8 +4683,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         selected_evidence["selection"]["coverage_score"] = _round(planning_allocation.coverage(
                             objective_load(q, e), selected_evidence["selection"]["component_allocation"], selected_accents,
                             targets={c:r["target"] for c,r in period_objectives.items()}))
-                        selected_rows = _add_forecast_session(forecast_rows, day, e)
-                        selected_after = recovery_v2.simulate(selected_rows, configs["zones"], target=day, include_details=False, include_deadlines=False, calculation_cache=recovery_calculation_cache)
+                        selected_load = e
                     if protected_components:
                         final_reservation = reservation_check(parts, bundle["cores"], capacity=selected_evidence)
                         protected_q, protected_e = final_reservation["q"], final_reservation["e"]
@@ -4667,7 +4695,13 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                             "reserved_effective":{c:_round(v) for c,v in protected_e.items()}})
                     selected_evidence["selection"]["long_term_uncovered_quality"] = bool(
                         planning_allocation.quality_priority(session["zone"], period_objectives))
-                forecast_rows, after = selected_rows, selected_after
+                # Admission and future reservations already checked each
+                # candidate. The same-day outcome is only reported for the
+                # selected final dose, so do not simulate or retain a full
+                # forecast ledger for every discarded alternative.
+                forecast_rows = _add_forecast_session(forecast_rows, day, selected_load)
+                after = recovery_v2.simulate(forecast_rows, configs["zones"], target=day, include_details=False,
+                    include_deadlines=False, calculation_cache=recovery_calculation_cache)
                 allowance = choice_headroom[(session["sport"], session["method_id"])]
                 continuity = (planning_continuity.evidence(session["direct_equivalent_minutes"],
                     session["canonical_effective_load"], allowance, active_segment) if allowance else None)
@@ -4936,6 +4970,11 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                   "readiness_dose_policy": "GOAL_ROLE_HALF_DEFICIT_BUILDING_60_PERCENT_MAINTENANCE", "diagnostic_reference_percent": 90,
                   "race_recovery_policy": "ADVISORY_ONLY_BELOW_90_PERCENT",
                   "allocation_policy": profile.get("_allocation_policy") or {},
+                  # Only legacy mixed recipes have an optional easy finish.
+                  # Inspect the full resolved executable registry: an enabled
+                  # recipe may become selectable under another replay policy.
+                  "allocation_policy_capabilities": {
+                      "optional_easy_fraction": any(m.get("mixed_component") for m in methods)},
                   "strength_exposure_policy": "WORK_AND_INTERSET_REST_EXCLUDING_WARMUP_COOLDOWN",
                   "strength_method_version": strength_methods.VERSION,
                   "strength_reduced_fraction_per_session": profile.get("strength_maintenance_fraction", .6),

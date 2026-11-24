@@ -42,7 +42,7 @@ it('opens the automatically published result without a second activate request',
   const transport=vi.fn(async(url:string)=>Response.json(url.endsWith('/active')?published(5):{job:{...ready,result_active_revision:5}}));
   vi.stubGlobal('fetch',transport);await mount(true,[],automaticEmpty);
   expect(container.textContent).toContain('Програмата е готова и е приложена.');
-  expect(container.textContent).toContain('Текущ план · версия 5');
+  expect(container.querySelector('[aria-label="Активна тренировъчна програма"]')?.getAttribute("data-plan-revision")).toBe("5");
   expect(container.textContent).not.toContain('Започни програмата');
   expect(transport.mock.calls.some(([url])=>url.includes('drafts?'))).toBe(false);
   expect(transport.mock.calls.some(([url])=>url.endsWith('/activate'))).toBe(false);
@@ -56,7 +56,7 @@ it('waits for the publication receipt instead of mistaking an old same-date plan
   expect(container.textContent).not.toContain('Програмата е готова и е приложена.');
   current=published(5,2);
   await act(async()=>vi.advanceTimersByTimeAsync(5000));
-  expect(container.textContent).toContain('Текущ план · версия 5');
+  expect(container.querySelector('[aria-label="Активна тренировъчна програма"]')?.getAttribute("data-plan-revision")).toBe("5");
   expect(container.textContent).toContain('Програмата е готова и е приложена.');
   expect(transport.mock.calls.some(([url])=>url.includes('drafts?'))).toBe(false);
 });

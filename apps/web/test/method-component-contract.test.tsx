@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
 import { SessionMethodGuidance } from "../components/session-method-guidance";
 import { TrainingPlanSummary } from "../components/training-plan-summary";
+import { planDates } from "../lib/plan-week-view";
 import { defaultManagementProfile, defaultPlanningControls, parseManagementProfile, type DraftSession, type PlanningDraft } from "../lib/training-management";
 
 const session = {
@@ -14,16 +15,15 @@ const session = {
   ] },
 } as unknown as DraftSession;
 
-it("shows the frozen native anchor and an expandable Q calculation without repeating equal work rows", () => {
+it("shows the frozen native anchor without exposing Q calculation diagnostics or changing their payload", () => {
+  const saved = structuredClone(session);
   const html = renderToStaticMarkup(<SessionMethodGuidance session={session}/>);
   expect(html).toContain("Работна опора:");
   expect(html).toContain("170");
-  expect(html).toContain("Как е изчислен Q?");
-  expect(html).toContain("0:06:00");
-  expect(html).toContain("0:04:48");
-  expect(html.match(/<td>Работа<\/td>/g)).toHaveLength(1);
-  expect(html).toContain("Прогнозен Q");
-  expect(html).toContain("Реалният Q се изчислява от записаното изпълнение");
+  expect(html).not.toContain("Как е изчислен Q?");
+  expect(html).not.toContain("Прогнозен Q");
+  expect(html).not.toContain("PLANNED_ESTIMATE_NOT_MEASURED_LOAD");
+  expect(session).toEqual(saved);
 });
 
 it("retains every combined parent anchor and never renames native work as MAS", () => {
@@ -52,29 +52,28 @@ it("renders the same complete frozen guidance when repeated parent cards use loc
 });
 
 it("does not clamp an overshoot to 100% or transfer it to an underfilled component", () => {
-  const plan = { start_date: "2026-10-26", end_date: "2026-11-01", days: [], parameters: {}, summary: {}, allocation: {
+  const plan = { start_date: "2026-10-26", end_date: "2026-11-01",
+    days: planDates("2026-10-26", "2026-11-01").map(date => ({date, status: "REST", sessions: []})),
+    parameters: {}, summary: {}, allocation: {
     components: {
       Z3: { basis: "DIRECT_Q", target: 100, actual: 0, planned: 120, remaining: 0, coverage_status: "ABOVE_RANGE", within_tolerance: false },
       Z4: { basis: "DIRECT_Q", target: 100, actual: 0, planned: 80, remaining: 20, coverage_status: "BELOW_RANGE", within_tolerance: false },
     }, constraints: [], dose_limits: [], acceptance: { lower_percent: 90, upper_percent: 110, target_percent: 100, within_tolerance: false },
   } } as unknown as PlanningDraft;
+  plan.days[0].status = "PLANNED";
+  plan.days[0].sessions = [{direct_equivalent_minutes: {Z3: 120, Z4: 80}}] as unknown as DraftSession[];
   const html = renderToStaticMarkup(<TrainingPlanSummary plan={plan}/>);
-  expect(html).toContain("120.0%");
-  expect(html).toContain("80.0%");
-  expect(html).toContain("Над 110%");
-  expect(html).toContain("Под 90%");
-  expect(html).toContain("Целим 100% за всеки компонент във всеки микроцикъл");
-  expect(html).toContain("Компоненти извън допустимите граници");
-  for (const row of Object.values(plan.allocation!.components)) {
-    row!.planned = 95;
-    row!.remaining = 5;
-    row!.within_tolerance = true;
-    row!.coverage_status = "WITHIN_RANGE";
-  }
+  expect(html).toContain("120.0% от целта");
+  expect(html).toContain("80.0% от целта");
+  expect(html).toContain("Целим 100%, с допустими 90–110% за всеки компонент");
+  expect(html).not.toContain("ABOVE_RANGE");
+  expect(html).not.toContain("BELOW_RANGE");
+  plan.days[0].sessions[0].direct_equivalent_minutes.Z3 = 95;
+  plan.days[0].sessions[0].direct_equivalent_minutes.Z4 = 95;
   const accepted = renderToStaticMarkup(<TrainingPlanSummary plan={plan}/>);
-  expect(accepted).toContain("95.0%");
-  expect(accepted).not.toContain("Остава непланиран товар");
-  expect(accepted).not.toContain("Компоненти извън допустимите граници");
+  expect(accepted.match(/95\.0% от целта/g)).toHaveLength(2);
+  expect(accepted).not.toContain("120.0% от целта");
+  expect(accepted).not.toContain("80.0% от целта");
 });
 
 it("accepts automatic strength frequency while retaining saved explicit limits", () => {
