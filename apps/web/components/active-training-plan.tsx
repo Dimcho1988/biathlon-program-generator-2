@@ -10,7 +10,7 @@ import { hasProgramDays } from "../lib/management-guidance";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { isRecord } from "../lib/training-status";
 import { durationHms } from "../lib/duration-format";
-import { COMPONENTS, type ActivePlanResponse, type DraftDay, type ManagementProfileResponse } from "../lib/training-management";
+import { type ActivePlanResponse, type DraftDay, type ManagementProfileResponse } from "../lib/training-management";
 import { changeActivePlan, PLAN_CHANGED_NOTICE } from "../lib/active-plan-request";
 import { PlanCheckHistory } from "./plan-check-history";
 import { activeScheduleView, planRangeLabel, selectedScheduleWindow } from "../lib/plan-week-view";
@@ -85,8 +85,8 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
   }
   const actionsDisabled = !canEdit || busy || externalBusy;
   const preparing = value.background_update?.status === "QUEUED" || value.background_update?.status === "RUNNING";
-  return <section className="management-active" aria-label="Активна тренировъчна програма">
-    <div className="management-panel management-current-heading"><div><p className="eyebrow">Текущ план · версия {record.revision}</p><h2>{automaticPublication && p.status === "REVIEW_REQUIRED" ? "Нужни са актуални данни" : STATE[p.status]}</h2>
+  return <section className="management-active" aria-label="Активна тренировъчна програма" data-plan-revision={record.revision}>
+    <div className="management-panel management-current-heading"><div><p className="eyebrow">Текущ план</p><h2>{automaticPublication && p.status === "REVIEW_REQUIRED" ? "Нужни са актуални данни" : STATE[p.status]}</h2>
       <WeekModeStatus record={record} profile={profile} automaticPublication={automaticPublication}/>{!symptomHold && !p.proposal && <p>{p.reason}</p>}
       <p>{fixed ? `${automaticPublication ? "Период" : "Утвърден период"}: ${week.start_date} – ${week.end_date}` : `Период: ${planRangeLabel(scheduleWeek)}`}. <Link href="/planning">Профил за планиране</Link></p>
       </div>
@@ -106,10 +106,6 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
     </aside>}
     {p.proposal && <PlanProposalReview key={record.revision} record={record} canEdit={canEdit} busy={busy || externalBusy} automaticPublication={automaticPublication}
       symptomHold={symptomHold} onApprove={() => mutate("action", { action: "APPROVE" })} renderDay={renderDay} today={today} scheduleStart={selectedWeek}/>}
-    {fixed && p.monitoring && <details className="management-panel"><summary>Актуална проверка на Recovery · {p.monitoring.evaluated_on}</summary>
-      <p>Готовност в началото на деня, %. Бъдещите стойности са прогноза за предложения вариант, а не потвърждение на запазените дози. При липсващо покритие стойността остава неизвестна.</p>
-      <div className="management-table-wrap"><table><thead><tr><th>Ден</th>{COMPONENTS.map(z => <th key={z}>{z}</th>)}</tr></thead><tbody>{p.monitoring.days.map(d => <tr key={d.date}><th>{d.date}</th>{COMPONENTS.map(z => <td key={z}>{typeof d.readiness_before?.[z] === "number" ? d.readiness_before[z]!.toFixed(0) : "—"}</td>)}</tr>)}</tbody></table></div>
-    </details>}
     {!p.proposal && p.mode === "AUTO" && p.status === "ACTIVE" && p.changes.length > 0 && <details className="management-panel"><summary>Приложени промени · {p.changes.length} дни</summary>
       <p>{automaticPublication ? "Тези корекции вече са включени в текущия график." : "Тези корекции вече са включени в текущия график. Не чакат утвърждаване."}</p>
       <ul>{p.changes.map(change => <li key={change.date}><strong>{change.date}:</strong> {change.before ? `${change.before} (${durationHms(change.before_minutes)}) → ` : ""}{change.after} ({durationHms(change.after_minutes)})<p>{change.reason}</p></li>)}</ul>
@@ -127,14 +123,15 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
         {p.decisions[day.date] && <button type="button" className="action-button secondary" disabled={actionsDisabled || record.stale} onClick={() => mutate("day", { date: day.date, action: "CLEAR", note: "" })}>Върни избора на системата</button>}
       </div>}
     </div>} /></div>}
-    <p className="management-muted">Изпълнението се отчита от реалните активности. Приравненият товар и готовността се преизчисляват от тях; отбелязването „Пропускам“ не създава измислено натоварване.</p>
-    {p.outcomes.length > 0 && <details className="management-panel"><summary>План и реално изпълнение</summary><div className="management-table-wrap"><table><thead><tr><th>Ден</th><th>Резултат</th><th>План</th><th>Изпълнено</th></tr></thead><tbody>{p.outcomes.slice(-28).reverse().map(o => <tr key={o.date}><td>{o.date}</td><td>{OUTCOME[o.status] ?? o.status}</td><td>{durationHms(o.planned_minutes)}</td><td>{o.actual_minutes === null ? "Няма данни" : durationHms(o.actual_minutes)}</td></tr>)}</tbody></table></div><p>Съпоставянето е по ден и средство. Наличието на активност не доказва, че всички предписани блокове са изпълнени.</p></details>}
-    <details className="management-panel"><summary>История и пълна проследимост</summary><ol>{value.history.map(h => <li key={h.revision}><strong>Версия {h.revision}</strong> · {new Date(h.recorded_at).toLocaleString("bg-BG")}<p>{h.reason}</p></li>)}</ol>
+    <details className="management-panel"><summary>История на програмата</summary>
+    {p.outcomes.length > 0 && <details><summary>План и реално изпълнение</summary><div className="management-table-wrap"><table><thead><tr><th>Ден</th><th>Резултат</th><th>План</th><th>Изпълнено</th></tr></thead><tbody>{p.outcomes.slice(-28).reverse().map(o => <tr key={o.date}><td>{o.date}</td><td>{OUTCOME[o.status] ?? o.status}</td><td>{durationHms(o.planned_minutes)}</td><td>{o.actual_minutes === null ? "Няма данни" : durationHms(o.actual_minutes)}</td></tr>)}</tbody></table></div><p>Съпоставянето е по ден и средство. Наличието на активност не доказва, че всички предписани блокове са изпълнени.</p></details>}
+    <details><summary>Версии на програмата</summary><ol>{value.history.map(h => <li key={h.revision}><strong>Версия {h.revision}</strong> · {new Date(h.recorded_at).toLocaleString("bg-BG")}<p>{h.reason}</p></li>)}</ol>
       <button type="button" className="action-button secondary" onClick={() => {
         const url = URL.createObjectURL(new Blob([JSON.stringify(record, null, 2)], { type: "application/json" }));
         const link = document.createElement("a"); link.href = url; link.download = `onflows-active-plan-v${record.revision}.json`; link.click(); URL.revokeObjectURL(url);
       }}>Изтегли пълните данни за тази версия</button>
     </details>
     {value.capabilities?.unchanged_checks === true && <PlanCheckHistory refreshKey={checksRefreshKey} />}
+    </details>
   </section>;
 }

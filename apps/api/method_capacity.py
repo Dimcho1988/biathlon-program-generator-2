@@ -9,6 +9,7 @@ from copy import deepcopy
 import math
 
 from biathlon import dosing_curve, method_anchors, speed_zones
+from biathlon.recipe_copy import copy_recipe
 
 
 Z5_ANCHOR_REFERENCE_S = 180.  # Existing preferred measured anchor, not a test requirement.
@@ -245,7 +246,7 @@ def library_curve_capacity(method, speed, context, *, use_model_prior=False):
                 "capacity_confidence": "PUBLISHED_HR_PRESCRIPTION", "capacity_is_estimate": False,
                 "model_version": resolved.get("version"), "fallback_reasons": resolved.get("fallback_reasons", []),
                 "hr_role": "PRIMARY_HRMAX", "speed_role": "NO_RELIABLE_SPEED_REQUIRED",
-                "method_library": deepcopy(library), "library_work_ceiling_minutes": standard,
+                "method_library": copy_recipe(library), "library_work_ceiling_minutes": standard,
                 "effort_profile": deepcopy(method["interval_template"])}
     if resolved.get("status") != "READY" or predictor is None:
         return None
@@ -263,7 +264,7 @@ def library_curve_capacity(method, speed, context, *, use_model_prior=False):
             "capacity_confidence": "SOURCE_RECIPE_ON_INDIVIDUAL_CURVE_ESTIMATE", "capacity_is_estimate": True,
             "model_version": resolved["curve_model_version"], "fallback_reasons": list(reasons),
             "hr_role": "OBSERVATION_ONLY", "speed_role": resolved["speed_role"],
-            "method_library": deepcopy(library), "library_work_ceiling_minutes": resolved["method_work_capacity_seconds"] / 60,
+            "method_library": copy_recipe(library), "library_work_ceiling_minutes": resolved["method_work_capacity_seconds"] / 60,
             "effort_profile": {**deepcopy(method["interval_template"]),
                                "continuous_capacity_min": duration / 60,
                                "target_speed_kmh": resolved["target_speed_kmh"],

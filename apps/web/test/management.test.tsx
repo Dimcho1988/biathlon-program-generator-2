@@ -70,12 +70,15 @@ describe("management data and review interface", () => {
     const auto = structuredClone(record);
     auto.payload.parameters = {availability_mode:"AUTO_HISTORY",available_weekly_minutes:null,weekly_minutes_ceiling:null,historical_training_weekly_minutes:840,volume_governor:"COMPONENT_7_40"};
     const html=renderToStaticMarkup(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:1}} initialDrafts={[auto]} today="2026-09-21"/>);
-    expect(html).toContain("7/40 по компоненти");
-    expect(html).toContain("Автоматично");
+    expect(html).not.toContain("7/40 по компоненти");
+    expect(html).not.toContain("AUTO_HISTORY");
+    expect(html).not.toContain("COMPONENT_7_40");
     expect(html).not.toContain("Свободното време в профила е под историческия обем");
-    expect(html).toContain("Кои качества тренираме тази седмица?");
+    expect(html).toContain("Цел → планирано → изпълнено");
+    expect(html).toContain("0:45:00");
+    expect(parseDraftRecord(auto)).toEqual(auto);
   });
-  it("shows all methods covered by a shared diagnostic and accepts legacy single-method records", () => {
+  it("retains shared and legacy rejected-method diagnostics without rendering them in the programme", () => {
     const grouped = structuredClone(record);
     grouped.payload.days[0].rejected_alternatives = [
       {method_id:"METHOD-A",method_ids:["METHOD-A","METHOD-B","METHOD-A"],code:"CAPACITY_UNAVAILABLE",reason:"Няма актуален индивидуален капацитет."},
@@ -83,22 +86,25 @@ describe("management data and review interface", () => {
     ];
     expect(parseDraftRecord(grouped)).toEqual(grouped);
     const html=renderToStaticMarkup(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:1}} initialDrafts={[grouped]} today="2026-09-21"/>);
-    expect(html).toContain("METHOD-A, METHOD-B");
-    expect(html).toContain("METHOD-C");
-    expect(html.match(/Няма актуален индивидуален капацитет\./g)).toHaveLength(1);
+    for (const diagnostic of ["METHOD-A", "METHOD-B", "METHOD-C", "CAPACITY_UNAVAILABLE", "INSUFFICIENT_DOSE_BUDGET", "Няма актуален индивидуален капацитет.", "Недостатъчен остатъчен бюджет."])
+      expect(html).not.toContain(diagnostic);
+    expect(html).toContain("Равномерна аеробна работа");
+    expect(grouped.payload.days[0].rejected_alternatives).toHaveLength(2);
     const malformed=structuredClone(grouped);
     malformed.payload.days[0].rejected_alternatives[0].method_ids=[];
     expect(()=>parseDraftRecord(malformed)).toThrow("Невалидна причина за неизбран метод.");
   });
-  it.each([["FUTURE_QUALITY_RESERVATION_WORK_CAP", "Резерв за бъдеща основна или силова тренировка"], ["LONG_TERM_QUALITY_PREPARATION", "Запазен товар за следващите основни задачи"]])("explains %s without displaying the internal limit code", (code, label) => {
+  it.each([["FUTURE_QUALITY_RESERVATION_WORK_CAP", "Резерв за бъдеща основна или силова тренировка"], ["LONG_TERM_QUALITY_PREPARATION", "Запазен товар за следващите основни задачи"]])("retains %s in the payload without rendering dose-limit diagnostics", (code, label) => {
     const reserved = structuredClone(record);
     reserved.payload.days[0].session!.dose_evidence.limits.push({code,limit_minutes:20});
     reserved.payload.allocation={components:{},constraints:[],dose_limits:[code]};
     const html=renderToStaticMarkup(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:1}} initialDrafts={[reserved]} today="2026-09-21"/>);
-    expect(html.split(label)).toHaveLength(3);
+    expect(html).not.toContain(label);
     expect(html).not.toContain(code);
+    expect(html).toContain("0:30:00");
+    expect(parseDraftRecord(reserved)).toEqual(reserved);
   });
-  it("shows direct-Q intent and the independent index limit without an E cycle quota", () => {
+  it("preserves direct-Q and independent-index evidence without rendering the algorithm budget table", () => {
     const current = structuredClone(record);
     for (const zone of COMPONENTS) Object.assign(current.payload.days[0].load_budget.components[zone], {
       prescription_basis:"LONG_TERM_MICROCYCLE_Q",long_term_window_start:"2026-09-22",long_term_window_end:"2026-09-28",
@@ -107,15 +113,16 @@ describe("management data and review interface", () => {
       index_7_40_before:1.2,index_7_40_limit:2,desired_index_7_40:1,
     });
     const html=renderToStaticMarkup(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:1}} initialDrafts={[current]} today="2026-09-21"/>);
-    expect(html).toContain("Прогнозен 7/40 преди задачата");
-    expect(html).toContain("Граница 7/40");
-    expect(html).toContain("<td>100 Q</td><td>10 Q</td><td>20 Q</td>");
-    expect(html).toContain("без отделна квота за микроцикъла");
+    expect(html).not.toContain("Прогнозен 7/40 преди задачата");
+    expect(html).not.toContain("Граница 7/40");
+    expect(html).not.toContain("<td>100 Q</td><td>10 Q</td><td>20 Q</td>");
+    expect(html).not.toContain("без отделна квота за микроцикъла");
+    expect(html).toContain("Цел → планирано → изпълнено");
     expect(html).not.toContain("Цел за отрязъка*");
     expect(html).not.toContain("LONG_TERM_MICROCYCLE_Q");
     expect(parseDraftRecord(current)).toEqual(current);
   });
-  it("distinguishes current microcycle remainder from rolling history and labels estimated curve capacity", () => {
+  it("preserves microcycle remainder and estimated capacity evidence without rendering technical diagnostics", () => {
     const current = structuredClone(record);
     for (const zone of COMPONENTS) Object.assign(current.payload.days[0].load_budget.components[zone], {
       prescription_basis:"LONG_TERM_MICROCYCLE_REMAINDER",long_term_window_start:"2026-09-22",long_term_window_end:"2026-09-25",
@@ -125,12 +132,13 @@ describe("management data and review interface", () => {
       capacity_source:"SPEED_DURATION_MODEL_CURVE",capacity_is_estimate:true,within_observed_test_window:false,fallback_reasons:[],
     });
     const html=renderToStaticMarkup(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:1}} initialDrafts={[current]} today="2026-09-21"/>);
-    expect(html).toContain("Натрупано за 7 дни*");
-    expect(html).toContain("Цел за отрязъка*");
-    expect(html).toContain("Оставащ пряк обем**");
-    expect(html).toContain("<td>215</td><td>180</td><td>40</td><td>15</td>");
-    expect(html).toContain("Tmax е моделна оценка при избраното усилие");
-    expect(html).toContain("Продължителността е извън диапазона на наличните максимални тестове");
+    expect(html).not.toContain("Натрупано за 7 дни*");
+    expect(html).not.toContain("Цел за отрязъка*");
+    expect(html).not.toContain("Оставащ пряк обем**");
+    expect(html).not.toContain("<td>215</td><td>180</td><td>40</td><td>15</td>");
+    expect(html).not.toContain("Tmax е моделна оценка при избраното усилие");
+    expect(html).not.toContain("Продължителността е извън диапазона на наличните максимални тестове");
+    expect(html).toContain("Последователност и интензивност на тренировката");
     expect(html).not.toContain("SPEED_DURATION_MODEL_CURVE");
     expect(html).not.toContain("LONG_TERM_MICROCYCLE_REMAINDER");
     expect(parseDraftRecord(current)).toEqual(current);
@@ -207,11 +215,16 @@ describe("management data and review interface", () => {
     const wrongDuration = structuredClone(record); wrongDuration.payload.days[0].session!.main_work_minutes = 60;
     expect(() => parseDraftRecord(wrongDuration)).toThrow();
   });
-  it("explains capacity, fallback and projected readiness in Bulgarian with exact durations", () => {
+  it("keeps exact prescription, practical guidance and export without capacity, fallback or dose-factor diagnostics", () => {
     const scaled = structuredClone(record);
     Object.assign(scaled.payload.days[0].session!.dose_evidence, {base_fraction:.6,readiness_dose_factor:.5});
+    const saved = structuredClone(scaled);
     const html = renderToStaticMarkup(<TrainingManagement athleteName="Тестов спортист" canEdit initialProfile={{ configured: true, profile, revision: 1 }} initialDrafts={[scaled]} today="2026-09-21" />);
-    for (const expected of ["Равномерна аеробна работа", "0:45:00", "0:30:00", "Защо тази задача и доза?", "Експертен Tmax", "Избраната продължителност е извън диапазона", "Специално подготвителен", "20 × 60% = 12 минути", "Начален дял за метода", "Множител от готовността", "Изтегли пълния отчет"]) expect(html).toContain(expected);
+    for (const expected of ["Равномерна аеробна работа", "0:45:00", "0:30:00", "Загрявка", "Разпускане", "145", "Бележки за изпълнението", "Защо тази тренировка сега?", "Планираният обем е намален според прогнозното възстановяване за деня.", "Изтегли пълния отчет"]) expect(html).toContain(expected);
+    for (const diagnostic of ["Защо тази задача и доза?", "Експертен Tmax", "Избраната продължителност е извън диапазона", "20 × 60% = 12 минути", "Начален дял за метода", "Множител от готовността", "EXPERT_CONTINUOUS_TREF", "OUTSIDE_OBSERVED_TEST_DURATION_SUPPORT"])
+      expect(html).not.toContain(diagnostic);
+    expect(html).not.toContain("<pre");
+    expect(scaled).toEqual(saved);
     expect(html).not.toContain("NaN");
     expect(html).not.toContain("Активирай");
   });

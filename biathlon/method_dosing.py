@@ -1,6 +1,6 @@
 """Shared method role budgets and role-specific Recovery adjustment."""
 import math
-from copy import deepcopy
+from .recipe_copy import copy_recipe
 
 VERSION = "source-standard-and-native-method-tmax-v5-bounded-full-dose"
 STRUCTURE_VERSION = "authored-method-role-floor-v2-bounded-full-dose"
@@ -119,7 +119,7 @@ def apply_structure_floor(method, evidence):
         original = library["resolution"]
         if original.get("structure") not in {"INTERVALS", "COMPOUND"}:
             return
-        r = deepcopy(original)
+        r = copy_recipe(original)
         source_min = r.get("source_minimum_repetitions", r["repetitions"][0])
         unit = r["cycle_work_seconds"]*r["sets"]
         allowed = r.get("role_reduction_allowed", False)

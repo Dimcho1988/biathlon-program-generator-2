@@ -5,9 +5,12 @@ engine replays preserve calendar locks, actual work, whole structures, causal
 Recovery and all Q/E and time gates. Ties retain the first stable schedule.
 """
 from datetime import date
+import json
 from time import monotonic
 
 from biathlon import planning_allocation
+
+MAX_UNIQUE_REPLAYS = 12  # The former maximum across every replay stage.
 
 
 def reservation_methods(plan):
@@ -125,12 +128,33 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
     unmet = needs_search(baseline)
     trials, refits, best = 0, 0, baseline
     budget_exhausted = False
-    def time_available():
-        nonlocal budget_exhausted
-        if monotonic()+1.1*estimated_trial_seconds >= deadline:
-            budget_exhausted = True
-            return False
-        return True
+    evaluated = {}
+    capabilities = (baseline.get("parameters") or {}).get("allocation_policy_capabilities") or {}
+    optional_easy_inactive = capabilities.get("optional_easy_fraction") is False
+    def evaluate(policy):
+        nonlocal estimated_trial_seconds, trials, refits, budget_exhausted
+        # Every replay uses this invocation's immutable inputs. Different
+        # stages may request the same policy and reservation map; reuse that
+        # exact result without charging another full calculation. Do not seed
+        # the baseline: its generating policy is not necessarily known here.
+        # Only the full resolved catalogue can establish that this option has
+        # no effect. A selected plan without MIX work does not establish it;
+        # absent/unknown capabilities retain the exact-policy fallback.
+        effective_policy = ({key: value for key, value in policy.items() if key != "optional_easy_fraction"}
+                            if optional_easy_inactive else policy)
+        key = json.dumps(effective_policy, sort_keys=True, separators=(",", ":"))
+        if key not in evaluated:
+            if trials >= MAX_UNIQUE_REPLAYS or monotonic()+1.1*estimated_trial_seconds >= deadline:
+                budget_exhausted = True
+                return None
+            began = monotonic()
+            evaluated[key] = replay(policy)
+            estimated_trial_seconds = max(estimated_trial_seconds, monotonic()-began)
+            trials += 1
+            refits += int("reservation_methods" in policy)
+        # Search metadata is added only after all candidate comparisons, so
+        # the cached result remains unchanged throughout this search.
+        return evaluated[key]
     if unmet or empty_requested_day(baseline):
         easy = {d["date"]: sum(s["main_work_minutes"] for s in d.get("sessions", []) if s["zone"] in {"Z1", "Z2"})
                 for d in baseline["days"] if not d.get("locked")}
@@ -155,55 +179,41 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
         for index, policy in enumerate(policies):
             if not needs_search(best) and not empty_requested_day(best):
                 break
-            if not time_available():
+            previous_best = best
+            candidate = evaluate(policy)
+            if candidate is None:
                 break
-            began = monotonic()
-            candidate = replay(policy)
-            estimated_trial_seconds = max(estimated_trial_seconds, monotonic()-began)
-            trials += 1
-            refits += int("reservation_methods" in policy)
             if score(candidate, accents) > score(best, accents):
                 best = candidate
             # Reconcile the first quality-first schedule immediately. On a
             # slower worker the budget may permit only two complete replays;
             # broad easy-work variants must not displace this causal refit.
             if (index == 0 and needs_search(best)
-                and any(reservation_methods(best).values()) and time_available()):
-                began = monotonic()
-                candidate = replay({**((best.get("parameters") or {}).get("allocation_policy") or policy),
+                and any(reservation_methods(best).values())):
+                candidate = evaluate({**((best.get("parameters") or {}).get("allocation_policy") or policy),
                     "reservation_methods":reservation_methods(best)})
-                estimated_trial_seconds = max(estimated_trial_seconds, monotonic()-began)
-                trials += 1
-                refits += 1
-                if score(candidate, accents) > score(best, accents):
+                if candidate is not None and score(candidate, accents) > score(best, accents):
                     best = candidate
-            # Give this targeted repair priority over broad optional-easy trials
-            # when the bounded window permits only two full replays.
-            repair = preparation_repair_policy(best) if index == 0 else None
-            if repair and time_available():
-                began = monotonic()
-                candidate = replay(repair)
-                estimated_trial_seconds = max(estimated_trial_seconds, monotonic()-began)
-                trials += 1
-                if score(candidate, accents) > score(best, accents):
+            # A later improvement can expose a new preparation bottleneck.
+            # Try its existing whole-method repair once, before another broad
+            # variant. A repair never recursively schedules another repair;
+            # all stages share the same time and unique-evaluation bounds.
+            repair = preparation_repair_policy(best) if index == 0 or best is not previous_best else None
+            if repair:
+                candidate = evaluate(repair)
+                if candidate is not None and score(candidate, accents) > score(best, accents):
                     best = candidate
         # Re-run causally with the selected future methods after exploring
         # the scheduling heuristics. A changed reservation never edits blocks in place:
         # every new repetition and every later dose passes the full engine.
         if needs_search(best) and any(s.get("method_id") for d in baseline["days"] for s in d.get("sessions", [])):
             for _ in range(2):
-                if not time_available():
-                    break
-                began = monotonic()
-                candidate = replay({**((best.get("parameters") or {}).get("allocation_policy") or {}),
+                candidate = evaluate({**((best.get("parameters") or {}).get("allocation_policy") or {}),
                     "reservation_methods":reservation_methods(best)})
-                estimated_trial_seconds = max(estimated_trial_seconds, monotonic()-began)
-                trials += 1
-                refits += 1
-                if score(candidate, accents) <= score(best, accents):
+                if candidate is None or score(candidate, accents) <= score(best, accents):
                     break
                 best = candidate
-        if needs_search(best) and time_available():
+        if needs_search(best):
             # Cap only early Z1 work; keep the Z2 accent intact and leave later
             # empty training days uncapped. This is another causal trial, not
             # an instruction to fill rest days or invent short fragments.
@@ -215,12 +225,11 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
                 d["date"] > first_easy and not d.get("locked") and not d.get("sessions")
                 and slots[date.fromisoformat(d["date"]).weekday()] > 0 for d in best["days"])
             if later_empty:
-                candidate = replay({**((best.get("parameters") or {}).get("allocation_policy") or {}),
+                candidate = evaluate({**((best.get("parameters") or {}).get("allocation_policy") or {}),
                     "reservation_methods":reservation_methods(best),
                     "easy_caps":{d:w*.75 for d,w in easy.items() if w > 0},
                     "easy_cap_zones":["Z1"], "spread_recovery":True})
-                trials += 1
-                if score(candidate, accents) > score(best, accents):
+                if candidate is not None and score(candidate, accents) > score(best, accents):
                     best = candidate
     minimum_shortfall, target_shortfall = development_shortfalls(best)
     configuration_conflict = any(row.get("activity_status") == "CONFLICT"
@@ -234,7 +243,7 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
             else "TARGETS_COVERED")
     else:
         conclusion = "SEARCH_BUDGET_EXHAUSTED" if budget_exhausted else "CHECKED_VARIANTS_EXHAUSTED"
-    best["allocation"]["search"] = {"version": "bounded-causal-replay-v10-development-and-coverage", "alternatives": trials,
+    best["allocation"]["search"] = {"version": "bounded-causal-replay-v11-cached-diagnostic-repairs", "alternatives": trials,
         "reservation_replays":refits,
         "improved": best is not baseline, "priority": ["WORST_COMPONENT_RANGE_GAP", "SUM_COMPONENT_RANGE_GAPS",
             "DEVELOPMENT_MINIMUM_SHORTFALL", "DEVELOPMENT_TARGET_SHORTFALL", "DISTANCE_TO_100_PERCENT",

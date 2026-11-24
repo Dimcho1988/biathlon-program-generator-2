@@ -2,43 +2,31 @@
 import {fetchPrepared} from "../lib/prepared-view";
 import { TrainingStructurePanel } from "./training-proposals";
 import {ManagementPreparationNotice} from "./management-preparation-notice";
-import { speedBasisLabel } from "../lib/speed-basis";
-import { SpeedEquivalenceComparison } from "./speed-equivalence-comparison";
-import { PreferredSpeed, RunningSpeedUnitControl } from "./running-speed-unit";
-import { executionGuidance } from "../lib/execution-guidance";
+import { RunningSpeedUnitControl } from "./running-speed-unit";
 import { useManagementFetch } from "./management-scope";
 import { parsePlanningJob, planningPending, planningStageLabel, planningFailure, type PlanningJob } from '../lib/planning-job';
-import { lactateRangeText } from "../lib/training-observations";
 
 import Link from "next/link";
 import { newerActivePlan } from "../lib/active-plan-request";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { durationHms } from "../lib/duration-format";
-import { blockDurationLabel, componentColor, strengthDuration } from "../lib/training-visuals";
-import { BlockExecutionRange } from "./block-execution-range";
 import { AthleteWorkout } from "./athlete-workout";
 import { isCalendarDate, isRecord } from "../lib/training-status";
 import { ActiveTrainingPlan } from "./active-training-plan";
 import { TrainingPlanWeek } from "./training-plan-week";
-import { PlanComparison } from "./plan-comparison";
 import { TrainingPlanReport } from "./training-plan-report";
 import { TrainingPlanOverview } from "./training-plan-overview";
 import { IndividualLearningPanel } from "./individual-learning-panel";
-import { MesocyclePriorities } from "./mesocycle-priorities";
-import { SessionMethodGuidance } from "./session-method-guidance";
-import { methodHrText } from "../lib/method-library";
 import { managementGuidance, hasProgramDays } from "../lib/management-guidance";
-import { activeScheduleView, availableScheduleWindows, isAdaptivePlan, planRangeLabel, planWeekView, selectedScheduleWindow } from "../lib/plan-week-view";
+import { availableScheduleWindows, isAdaptivePlan, planRangeLabel, planWeekView, selectedScheduleWindow } from "../lib/plan-week-view";
 import { SyncActionForm } from "./sync-action-form";
 import { SyncStatusPanel } from "./sync-status-panel";
 import type { SyncState } from "../lib/sync";
 import type { ManagementOverviewActive, ManagementPreparation } from "../lib/management-overview";
 import {
-  daySessions, rejectedMethodIds, CAPACITY_LABELS, COMPONENTS, PHASE_LABELS, parseDrafts,
+  daySessions, parseDrafts,
   parseActivePlanResponse, type ActivePlanResponse, type ManagementOutlook, type DraftDay, type DraftRecord, type ManagementProfileResponse,
 } from "../lib/training-management";
 
-const number = (value: unknown, digits = 1) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("bg-BG", { maximumFractionDigits: digits }) : "—";
 const EMPTY_ACTIVE: ActivePlanResponse = {active: null, history: []};
 const dateLabel = (day: string) => new Date(`${day}T12:00:00Z`).toLocaleDateString("bg-BG", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 const datePlus = (day: string, days: number) => { const value = new Date(`${day}T12:00:00Z`); value.setUTCDate(value.getUTCDate() + days); return value.toISOString().slice(0, 10); };
@@ -46,79 +34,6 @@ class ManagementRequestError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
 const STATUS_LABELS: Record<string, string> = { TRAINING: "Тренировка", REST: "Почивка", EXISTING_ACTIVITY: "Има изпълнена активност", UNAVAILABLE: "Няма свободно време", RACE: "Състезание", REVIEW_REQUIRED: "Нужен е преглед", SKIPPED: "Пропусната тренировка" };
-const LIMIT_LABELS: Record<string, string> = { ALTERNATIVE_EASY_ALLOCATION: "Преразпределение за покриване на акцентната цел", LONG_TERM_QUALITY_PREPARATION: "Запазен товар за следващите основни задачи", FUTURE_QUALITY_RESERVATION_WORK_CAP: "Резерв за бъдеща основна или силова тренировка", SUPPLEMENTARY_DOSE_CAP: "Дозов лимит на допълващия компонент според готовността", DEVELOPMENTAL_DOSE_CAP: "Дозов лимит на краткия въвеждащ вариант", CLOSEST_WHOLE_Q_DOSE: "Цяла методна доза най-близо до целта по Q", COMPLETE_DOSE_ALLOCATION: "Разпределение в цели сесии над минималната доза", ROLLING_Q_AND_7_40_BUDGET: "Оставащ обем и товар от дългосрочната цел", WHOLE_STRUCTURE_DOSE_FRACTION: "Общ дозов таван за всички работни части", COMPONENT_SLOT_ALLOCATION: "Разпределен товар за тази сесия", TECHNICAL_SESSION_CEILING: "Техническа граница на сесията, не оценка на свободното време", ACTUAL_SPORT_EXPOSURE: "Историческа поносимост за конкретното средство", ACTUAL_SPORT_SESSION_EXPOSURE: "Най-дълга скорошна сесия за това средство × вълна", RESERVE_LONG_SESSION_TIME: "Запазено време за дългата тренировка", METHOD_WORK_CAP: "Максимална основна работа за метода", DAILY_AVAILABLE_WORK: "Оставащо време след загрявка и разпускане", REMAINING_WEEKLY_WORK: "Оставащ седмичен обем за основна работа", LOW_ABSOLUTE_RECOVERY_CAP: "Лимит на възстановителната работа", TAPER_DAILY_WORK_CAP: "Лимит за предсъстезателно разтоварване", ROLLING_7_40_COMPONENT_BUDGET: "Оставащ товар за текущия микроцикъл", RACE_DURATION_WORK_CAP: "Граница според дисциплината", RESERVE_KEY_SESSION_TIME: "Запазено време за ключовите сесии" };
-const FALLBACK_LABELS: Record<string, string> = {
-  NO_INDIVIDUAL_SPEED_CURVE: "Все още няма индивидуално калибрирана крива скорост–време.",
-  EXPLORATORY_OR_NONMAXIMAL_TESTS: "Наличните тестове са ориентировъчни или не са максимални.",
-  INSUFFICIENT_INDEPENDENT_TEST_DURATIONS: "Нужни са поне две различни продължителности на надеждни тестове.",
-  HRMAX_REQUIRED_FOR_HR_SPEED_MAPPING: "Липсва максимален пулс за връзката пулс–скорост.",
-  STALE_HR_SPEED_INDEX: "Индексът за връзката пулс–скорост няма достатъчно скорошни наблюдения.",
-  INSUFFICIENT_COMPARABLE_INDEX_OBSERVATIONS: "Няма достатъчно съпоставими наблюдения на индекса в тази зона.",
-  HR_MAPPING_USES_EXPERT_ANCHOR: "Преобразуването от пулс към скорост използва експертна опорна стойност.",
-  OUTSIDE_OBSERVED_TEST_DURATION_SUPPORT: "Избраната продължителност е извън диапазона, подкрепен от индивидуалните тестове.",
-  OUTSIDE_HR_SPEED_PREDICTION_RANGE: "Избраната интензивност е извън надеждния диапазон на връзката пулс–скорост.",
-};
-
-function PeriodizationTable({ value }: { value: unknown }) {
-  if (!isRecord(value) || !Array.isArray(value.phases)) return null;
-  const phases = value.phases.filter(isRecord);
-  return <><h3>Разпределение на периодите</h3><div className="management-table-wrap"><table><thead><tr><th>Период</th><th>От</th><th>До</th><th>Дни</th></tr></thead><tbody>{phases.map((phase, index) => <tr key={index}><th>{PHASE_LABELS[String(phase.kind)] ?? String(phase.kind)}</th><td>{String(phase.start_date)}</td><td>{String(phase.end_date)}</td><td>{number(phase.days, 0)}</td></tr>)}</tbody></table></div>
-    <details><summary>Защо са избрани тези периоди?</summary><ul>{phases.map((phase, index) => <li key={index}><strong>{PHASE_LABELS[String(phase.kind)] ?? String(phase.kind)}:</strong> {String(phase.reason ?? "")}</li>)}</ul></details></>;
-}
-
-function SessionCoachReport({ day }: { day: DraftDay }) {
-  const session = day.session;
-  const strength = session ? strengthDuration(session) : null;
-  const evidence = session?.dose_evidence;
-  const execution = executionGuidance(session?.blocks ?? []);
-  const segmentBudget = COMPONENTS.map(zone => day.load_budget.components[zone]).find(budget =>
-    budget?.prescription_basis === "LONG_TERM_MICROCYCLE_REMAINDER" || budget?.prescription_basis === "LONG_TERM_MICROCYCLE_Q");
-  const qPrescription = COMPONENTS.some(zone => day.load_budget.components[zone]?.prescription_basis === "LONG_TERM_MICROCYCLE_Q");
-  return <section className="management-coach-session">
-    <h4>{session?.title ?? STATUS_LABELS[day.status] ?? day.status}</h4>
-    {strength && <p className="management-notice">Силова част: {durationHms(strength.main)} = {durationHms(strength.work)} упражнения + {durationHms(strength.rest)} почивки и преходи. Загрявката и разпускането са извън този силов обем.</p>}
-    <p>{day.explanation}</p>
-    {session?.race_course_guidance && <p className="management-notice"><strong>{session.race_course_guidance.event_name}:</strong> {session.race_course_guidance.note}</p>}
-    {session?.execution_range_policy && <p className="management-muted">{session.execution_range_policy.note}</p>}
-    {session && <SessionMethodGuidance session={session}/>}
-    {session?.speed_equivalence_comparison && <details className="management-detail"><summary>Еквивалентно време на тази тренировка по скорост</summary><SpeedEquivalenceComparison value={session.speed_equivalence_comparison}/></details>}
-    {evidence?.planned_gap_hours && <p className="management-notice">Планирай поне {durationHms(evidence.planned_gap_hours * 60)} между двете прагови сесии. Преди втората прецени реакцията към първата и контрола на усилието.</p>}
-    {session?.neuromuscular_exposure && <p className="management-notice">{session.neuromuscular_exposure.repetitions} ускорения · {session.neuromuscular_exposure.work_seconds} s работа. {session.neuromuscular_exposure.note}</p>}
-    <MesocyclePriorities cycle={isRecord(day.cycle) ? day.cycle : undefined}/>
-    {session && <details className="management-execution"><summary>Как да изпълня тренировката</summary>{execution.common.length > 0 && <div className="management-common-guidance"><h4>Общи указания за повтарящите се части</h4>{execution.common.map((group, index) => <p key={index}><strong>{group.zone}:</strong> {group.text}</p>)}</div>}<ol className="management-blocks">{session.blocks.map((block, index) => <li key={`${block.kind}-${index}`} style={{ borderLeft: `3px solid ${componentColor(block.zone)}` }}><div><strong>{block.label}</strong><span>{blockDurationLabel(block)} · {block.zone}</span></div>{execution.blocks[index].showInstructions && <p>{block.instructions}</p>}
-      {(block.hr_reference_range_bpm || block.target_hr_bpm != null) && <small>{block.hr_reference_range_bpm ? `${block.hr_reference_range_bpm.map(v => number(v, 0)).join("–")} уд./мин` : `${number(block.target_hr_bpm, 0)} уд./мин`}</small>}
-      {!block.target_speed_range_kmh && block.target_speed_kmh != null && <small><PreferredSpeed speed={block.target_speed_kmh} sport={session.sport}/> · {speedBasisLabel(block)}</small>}
-      {block.lactate_reference && execution.blocks[index].showLactate && <p className="management-muted">Лактат за частите със същия ориентир: {lactateRangeText(block.lactate_reference)} · {block.lactate_reference.label}{block.lactate_reference.assessed_on ? ` · ${block.lactate_reference.assessed_on}` : ""}{block.lactate_reference.note ? `. ${block.lactate_reference.note}` : ""}</p>}
-      <BlockExecutionRange block={block} sport={session.sport}/>
-      {block.hr_reference_range_bpm && <small>{methodHrText(block)}</small>}
-    </li>)}</ol></details>}
-    <details className="management-detail"><summary>Защо тази задача и доза?</summary>
-      {evidence && <><p><strong>Основа: {CAPACITY_LABELS[evidence.capacity_source] ?? evidence.capacity_source}.</strong></p><p>{evidence.explanation}</p>
-        {evidence.method_dose_factors && <p className="management-muted"><strong>Ред на дозиране:</strong> {evidence.method_dose_factors.map(f => f.stage === "STANDARD_METHOD" ? `${number(f.work_minutes)} мин стандартна работа` : `${f.stage === "ROLE" ? "роля" : f.stage === "RECOVERY" ? "Recovery" : f.stage === "COMBINATION" ? "комбиниран дял" : "корекция"} × ${number(f.factor, 3)}`).join(" → ")}{evidence.unrounded_requested_work_minutes != null ? ` = ${number(evidence.unrounded_requested_work_minutes, 3)} мин преди избор на цели повторения.` : "."} Реално предписано: {durationHms(evidence.prescribed_work_minutes)}.</p>}
-        {evidence.capacity_is_estimate && <p className="management-muted">Tmax е моделна оценка при избраното усилие.{evidence.within_observed_test_window === false ? " Продължителността е извън диапазона на наличните максимални тестове." : ""} Това не е измерен максимален резултат.</p>}
-        <dl className="management-facts"><div><dt>{evidence.capacity_source === "STRENGTH_METHOD_PROFILE" ? "Работна граница на силовия профил" : "Непрекъсната устойчивост"}</dt><dd>{durationHms(evidence.capacity_minutes)}</dd></div>{evidence.base_fraction != null && <div><dt>Начален дял за метода</dt><dd>{number(evidence.base_fraction * 100)}%</dd></div>}{evidence.readiness_dose_factor != null && <div><dt>Множител от готовността</dt><dd>{number(evidence.readiness_dose_factor * 100)}%</dd></div>}<div><dt>Използван дял от общия работен капацитет</dt><dd>{number((evidence.applied_structure_fraction ?? evidence.fraction) * 100)}%</dd></div>{(evidence.min_dose_fraction ?? 0) > 0 && <div><dt>{evidence.minimum_dose_scope === "SHARED_DOUBLE_THRESHOLD" ? "Архивен минимум за общата доза" : evidence.minimum_dose_scope === "SUPPLEMENTARY_COMPONENT" ? "Минимум за допълващия компонент" : "Минимум от работния капацитет на сесията"}</dt><dd>{number((evidence.min_dose_fraction ?? 0) * 100)}%</dd></div>}{evidence.minimum_structure_work_minutes != null && <div><dt>Минимална завършена работна структура</dt><dd>{durationHms(evidence.minimum_structure_work_minutes)}</dd></div>}<div><dt>Първоначално поискана работа</dt><dd>{durationHms(evidence.requested_work_minutes)}</dd></div><div><dt>Предписана основна работа</dt><dd>{durationHms(evidence.prescribed_work_minutes)}</dd></div></dl>
-        {evidence.limits.length > 0 && <><h4>Приложени ограничения</h4><ul>{evidence.limits.map((limit, index) => <li key={`${limit.code}-${index}`}>{LIMIT_LABELS[limit.code] ?? limit.code}: {durationHms(limit.limit_minutes)}</li>)}</ul></>}
-        {evidence.fallback_reasons.length > 0 && <><h4>Защо е използвана резервната оценка?</h4><ul>{evidence.fallback_reasons.map((reason, index) => <li key={index}>{FALLBACK_LABELS[reason] ?? reason}</li>)}</ul></>}
-        <p className="management-muted">Метод: {session.method_id} · Версия на оценката: {evidence.model_version}</p>
-      </>}
-      <h4>Готовност и натрупано натоварване</h4>
-      <p className="management-muted">Базата е избраната стандартна доза на подходящия метод. Например при 20 минути стандартна работа поддържащата доза е 20 × 60% = 12 минути. По текущото правило тя не получава второ намаление от Recovery. За развиващата работа при Recovery 80%: 20 × 90% = 18 минути; при комбинация с втори компонент: 20 × 90% × 50% = 9 минути преди избор на допустими цели повторения. Под 50% Recovery не се допуска целева работа над Z1. Комбинираните части използват половината от собствения си ролеви бюджет. Целите повторения, загрявката, времето и общият товар се проверяват отделно.</p>
-      {segmentBudget?.long_term_window_start && segmentBudget.long_term_window_end && <p className="management-muted">Оставащата доза следва дългосрочната цел за {dateLabel(segmentBudget.long_term_window_start)} – {dateLabel(segmentBudget.long_term_window_end)}. Натрупаното за 7 дни и индексът 7/40 описват общия товар от историята и предложените задачи.</p>}
-      {qPrescription && <p className="management-muted">Целта и покритието са по пряк Q. Стремежът е 100% за всеки компонент; цели методни дози могат да използват до 110%. E участва в прогнозния 7/40 и Recovery, без отделна квота за микроцикъла. Желаният индекс и допустимата му граница са различни величини.</p>}
-      <div className="management-table-wrap"><table><thead><tr><th>Компонент</th><th>Преди</th><th>След</th><th>{qPrescription ? "Прогнозен 7/40 преди задачата" : "7/40"}</th><th>{qPrescription ? "Граница 7/40" : "Натрупано за 7 дни*"}</th><th>{qPrescription ? "Цел за цикъла" : segmentBudget ? "Цел за отрязъка*" : "Цел за 7 дни*"}</th><th>{qPrescription ? "До 100%" : "Оставащ товар*"}</th>{segmentBudget && <th>{qPrescription ? "Допустим остатък" : "Оставащ пряк обем**"}</th>}</tr></thead><tbody>{COMPONENTS.map(zone => {
-        const budget = day.load_budget.components[zone];
-        if (qPrescription) {
-          const direct = budget?.prescription_basis === "LONG_TERM_MICROCYCLE_Q";
-          const unit = direct ? "Q" : "E";
-          return <tr key={zone}><th>{zone}</th><td>{number(day.readiness_before[zone])}{day.readiness_before[zone] === null ? "" : "%"}</td><td>{number(day.readiness_after[zone])}{day.readiness_after[zone] === null ? "" : "%"}</td><td>{number(budget?.index_7_40_before ?? budget?.index_7_40, 2)}</td><td>{number(budget?.index_7_40_limit, 2)}</td><td>{number(direct ? budget?.target_period_q : budget?.target_period_effective)} {unit}</td><td>{number(direct ? budget?.remaining_target_q : budget?.deficit_effective)} {unit}</td><td>{number(direct ? budget?.remaining_q : budget?.deficit_effective)} {unit}</td></tr>;
-        }
-        return <tr key={zone}><th>{zone}</th><td>{number(day.readiness_before[zone])}{day.readiness_before[zone] === null ? "" : "%"}</td><td>{number(day.readiness_after[zone])}{day.readiness_after[zone] === null ? "" : "%"}</td><td>{number(budget?.index_7_40, 2)}</td><td>{number(budget?.rolling_7d_effective)}</td><td>{number(segmentBudget ? budget?.target_period_effective : budget?.target_weekly_effective)}</td><td>{number(budget?.deficit_effective)}</td>{segmentBudget && <td>{number(budget?.remaining_q)}</td>}</tr>;
-      })}</tbody></table></div><p className="management-muted">{qPrescription ? "Q е прекият приравнен обем. Запазените ръчни цели по E запазват своята единица. Остатъците са към момента на разпределяне на задачата." : <>* Приравнени минути товар с влияние от всички по-високи зони и добавки между съседи. {segmentBudget ? "** Преки приравнени минути в компонента. Остатъците са при разпределянето на задачите." : ""}</>} Тези величини се различават от продължителността на сесията и измереното време в зона.</p>
-      {day.rejected_alternatives.length > 0 && <><h4>Защо не е избрана друга задача?</h4><ul>{day.rejected_alternatives.map((alternative, index) => <li key={index}>{alternative.reason} <small>({Array.from(new Set(rejectedMethodIds(alternative))).join(", ")})</small></li>)}</ul></>}
-    </details>
-  </section>;
-}
-
 function DayCard({ day }: { day: DraftDay }) {
   const sessions = daySessions(day);
   if (!sessions.length) return <article className="management-day"><p className="management-day-date">{dateLabel(day.date)}</p>
@@ -126,19 +41,6 @@ function DayCard({ day }: { day: DraftDay }) {
   return <section aria-label="Тренировките за деня">{sessions.map((session, index) =>
     <AthleteWorkout key={day.date + "-" + index} day={day} session={session}
       position={sessions.length > 1 ? "Тренировка " + (index + 1) + " от " + sessions.length : undefined}/>)}</section>;
-}
-
-function CoachWeekReport({days, today, proposalDates = []}: {days: DraftDay[]; today: string; proposalDates?: string[]}) {
-  const [selectedDate, setSelectedDate] = useState("");
-  const day = days.find(item => item.date === selectedDate) ?? days.find(item => item.date >= today) ?? days[0];
-  if (!day) return null;
-  const sessions = daySessions(day);
-  return <details><summary>Подробен треньорски отчет</summary>
-    <label>Ден за отчета <select value={day.date} onChange={event => setSelectedDate(event.target.value)}>
-      {days.map(item => <option key={item.date} value={item.date}>{dateLabel(item.date)}{proposalDates.includes(item.date) ? " · прогноза от предложението" : ""}</option>)}</select></label>
-    {sessions.length ? sessions.map((session, index) => <SessionCoachReport key={index} day={{...day,session}}/>)
-      : <SessionCoachReport day={day}/>}
-  </details>;
 }
 
 export function TrainingManagement({ initialView = "week", initialOutlook = null, athleteName, canEdit, initialProfile, initialDrafts, initialActive = EMPTY_ACTIVE, initialOverviewActive, initialSyncState = null, renderedGenerationId, syncUnavailable = false, syncError = false, preparation = null, today: initialToday }: {
@@ -201,9 +103,6 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
   const archivedDraft = showDraft && !!draft && draft.stale !== false;
   const draftWeek = draft ? selectedScheduleWindow(draft.payload,today,selectedWeek) : undefined;
   const draftSchedule = draft && draftWeek ? planWeekView(draft.payload,draftWeek) : undefined;
-  const reportSchedule = !showDraft && view === "week" && active.active && visibleWeekPlan
-    ? activeScheduleView(active.active, selectedScheduleWindow(visibleWeekPlan, today, selectedWeek), viewingProposal)
-    : draftSchedule && { ...draftSchedule, proposalDates: [] };
   const sessionsCurrent = overviewPlan && (showDraft ? !archivedDraft : active.active?.stale === false)
     && (!initialOutlook?.engine_version || overviewPlan.engine_version === initialOutlook.engine_version);
   const compactOverview = view === "overview" ? initialOverviewActive : undefined;
@@ -408,11 +307,11 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
       </select></label>
     </div>}
     {view === "week" && saved.configured && <TrainingStructurePanel key={selectedWeek || today} today={today} defaultStart={visibleWeekPlan ? selectedScheduleWindow(visibleWeekPlan, today, selectedWeek).start : today} canEdit={canEdit} disabled={busy !== null || pendingGeneration}/>}
-    {view === "week" && overviewPlan && <details className="management-panel"><summary>Цели и изпълнение по микроцикъл</summary>
+    {view === "week" && overviewPlan && <>
     {!showDraft && active.active?.stale && <p className="management-notice">Отчетът е от последната запазена програма. Новите данни още не са отразени в дозите.</p>}
     {view === "week" && overviewPlan && !archivedDraft && <TrainingPlanReport automaticPublication={automaticPublication} plan={overviewPlan} planKind={showDraft ? "DRAFT" : "APPROVED"} today={today} selectedWeek={isAdaptivePlan(overviewPlan) ? undefined : selectedWeek} onWeekChange={isAdaptivePlan(overviewPlan) ? undefined : setSelectedWeek} showProposal={!showDraft && showProposal} onShowProposalChange={setShowProposal} proposal={showDraft ? null : active.active?.payload.proposal} qExecution={showDraft ? undefined : active.active?.payload.q_execution} outcomes={showDraft ? [] : active.active?.payload.outcomes}/>}
-    </details>}
-    {(view === "overview" || (!archivedDraft && (showDraft || active.active?.stale === false))) && <IndividualLearningPanel plan={view === "overview" ? initialOutlook : visibleWeekPlan} />}
+    </>}
+    {view === "overview" && <IndividualLearningPanel plan={initialOutlook} />}
 
     {view === "overview" ? <TrainingPlanOverview plan={initialOutlook ?? undefined} outcomes={compactOverview?.outcomes ?? active.active?.payload.outcomes ?? []} today={today} currentProfileRevision={initialOutlook?.profile_revision} volumeContext={initialOutlook?.volume_context} sessions={overviewSessionsCurrent ? overviewSessions : undefined} sessionStatus={sessionStatus} /> : <>
       {active.active && !newDraft && <ActiveTrainingPlan value={active} profile={saved} onChange={receiveActive} externalBusy={busy !== null} onBegin={beginActiveChange} onEnd={endActiveChange} canEdit={canEdit} today={today} selectedWeek={selectedWeek} showProposal={showProposal} renderDay={day => <DayCard day={day} />} />}
@@ -428,14 +327,11 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
         {draft && !archivedDraft && draftWeek && draftSchedule && hasProgramDays(draft.payload) && <section className="management-plan" aria-label="Проект на тренировъчна програма"><h2>{planRangeLabel(draftWeek)}</h2><p className="management-muted">{automaticPublication ? "Подготвен вариант — още не е приложен. Причината и следващата стъпка са показани по-горе." : "Предложение за преглед — още не е започната програма."}</p><TrainingPlanWeek days={draftSchedule.days} period={draftWeek} forecastDates={draftSchedule.forecastDates} programmeLabel="Предложение" today={today} renderDay={day => <DayCard day={day} />} /></section>}
       </>}
     </>}
-    {view === "week" && !archivedDraft && <PlanComparison plan={visibleWeekPlan} outcomes={active.active?.payload.outcomes ?? []} speedSource={viewingProposal ? undefined : showDraft && draft && !archivedDraft ? {kind:"DRAFT",revision:draft.revision,start_date:draft.payload.start_date} : active.active?.stale === false ? {kind:"ACTIVE",revision:active.active.revision} : undefined} />}
-    {view === "week" && <details className="management-panel" id="plan-details"><summary>Обяснения и отчет</summary>
-      {reportSchedule && !archivedDraft && <CoachWeekReport days={reportSchedule.days} proposalDates={reportSchedule.proposalDates} today={today}/>}
+    {view === "week" && <details className="management-panel" id="plan-details"><summary>Още действия и условия</summary>
       {active.active && <button type="button" className="action-button secondary" onClick={() => { setNewDraft(!newDraft); }}>{newDraft ? "Обратно към активната програма" : "Подготви друга програма"}</button>}
       {draft && !archivedDraft && <>
         <details><summary>Всички условия и пояснения · {draft.payload.warnings.length}</summary><ul>{draft.payload.warnings.map((warning, index) => <li key={`${warning.code}-${index}`}>{warning.message}</li>)}</ul></details>
         {!hasProgramDays(draft.payload) && <details><summary>Оценка по дни</summary>{draft.payload.days.map(day => <DayCard key={day.date} day={day} />)}</details>}
-        <details><summary>Периодизация и източници</summary><PeriodizationTable value={draft.payload.periodization} /><pre>{JSON.stringify({ periodization: draft.payload.periodization, parameters: draft.payload.parameters, source: draft.payload.source, catalog: draft.payload.catalog }, null, 2)}</pre></details>
         <button type="button" className="action-button secondary" onClick={exportDraft}>Изтегли пълния отчет</button></>}
       {guidance.step !== "GENERATE" && guidance.step !== "START_DATE" && saved.configured && <details><summary>Преизчисли за друга начална дата</summary>{generateForm}</details>}
       {canEdit && guidance.step !== "SYNC" && guidance.step !== "WAIT" && <SyncActionForm scope="FULL" returnTo="/management" label="Обнови тренировките от Intervals" />}

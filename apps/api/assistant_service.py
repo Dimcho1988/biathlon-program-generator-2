@@ -112,7 +112,7 @@ def _capabilities(access):
         read_views["management"]=["overview", "strategy", "week", "profile", "outlook", "active", "drafts",
             "draft-metadata", "state", "checks"]
         if access.get("can_view_recovery"):
-            read_views["management"].append("speed-comparison")
+            read_views["management"].extend(["speed-comparison", "diagnostics"])
         if access.get("can_edit_plan"):
             read_views["management"].extend(["generation-jobs", "race-duration"])
         if access.get("can_view_recovery") or access.get("can_edit_plan"):

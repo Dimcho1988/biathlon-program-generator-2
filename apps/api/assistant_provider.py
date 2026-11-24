@@ -97,6 +97,8 @@ trainability за ИТ, learning за самообучение, response за н
 за план/предложение/профил, methods за каталога, navigation за точен път към
 акаунт, споделяне, смяна на спортист или свързване на приложение. Пароли, ключове и
 вход в акаунт се обработват само през съответните форми; не ги събирай в разговора.
+За причините за плана: management с view=diagnostics, после нужния section с revision
+от указателя. За обикновен преглед използвай day/week.
 За общата философия на подготовката, периодизацията, дългосрочната стратегия и
 подготовката за основните стартове избери management с view=strategy. Тази справка
 свързва целите и календара с фазите, акцентите и натоварването; не зареждай всички
@@ -378,8 +380,8 @@ _REPLY_TOOL: dict[str, Any] = {
                 "view": {"type": ["string", "null"], "description": "Optional subview advertised in capabilities; omit for overview."},
                 "days": {"type": ["integer", "null"], "description": "Inclusive window ending at end or athlete-local today: history supports 1–90 days; learning supports 14, 30, 60, 90, 366. Use 30 for last month/last 30 days, or explicit start/end dates."},
                 "phase": {"type": ["string", "null"], "description": "Optional method catalog phase from the current catalog."},
-                "section": {"type": ["string", "null"], "description": "Exact dot-separated section from result.pagination, for detail or the next page; maximum 8 parts."},
-                "revision": {"type": ["integer", "null"], "description": "Exact positive saved plan revision when inspecting a specific version."},
+                "section": {"type": ["string", "null"], "description": "Exact section path from pagination or diagnostics index; maximum 8 parts."},
+                "revision": {"type": ["integer", "null"], "description": "Saved plan revision; diagnostics pages require the index revision. On 409, read a new index."},
                 "plan_kind": {"type": ["string", "null"], "enum": ["DRAFT", "ACTIVE", None]},
                 "test_mode": {"type": ["string", "null"], "enum": ["STRICT", "EXPLORATORY", None]},
                 "offset": {"type": ["integer", "null"], "description": "Pagination offset from the prior result; default 0."},

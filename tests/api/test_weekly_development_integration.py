@@ -49,6 +49,51 @@ def test_feasible_loading_frequency_survives_candidate_dose_sharing(monkeypatch,
     assert_daily_limits(plan)
 
 
+@pytest.mark.parametrize("available,expected_supplements", [(60, 0), (70, 2)])
+def test_optional_preparation_preserves_two_real_developmental_doses(
+        monkeypatch, available, expected_supplements):
+    from tests.api.test_load_progression import observed
+    from tests.api.test_long_term_scheduling import assert_segment_contract
+    from tests.api.test_quality_reservation_feasibility import constrained_profile, selected_methods
+
+    fixed_readiness(monkeypatch, 100.)
+    original = engine._goals
+    def goals(*args, **kwargs):
+        values, accents, cycle = original(*args, **kwargs)
+        for zone, target in {"Z1": 500., "Z2": 80., "Z3": 70., "Z4": 20.}.items():
+            values[zone].update(target_weekly_q=target, desired_weekly_q=target)
+        return values, accents, cycle
+    monkeypatch.setattr(engine, "_goals", goals)
+    profile = constrained_profile([0, available, 0, 0, available, 0, 0], [0, 2, 0, 0, 2, 0, 0])
+    profile["planning_controls"].update(mesocycle_anchor=TODAY.isoformat(), threshold_days=[1, 4])
+    profile["max_key_sessions_per_week"] = 2
+    selected_methods(monkeypatch, profile,
+        {"END-THR-TIME-01-FLEX", "END-CROSS-TRAIN-01-Z2-MIX-STEADY"})
+    repository, _, _ = observed()
+
+    plan = engine.generate_plan(repository, "athlete", profile, start_date=TODAY, now=NOW)
+
+    sessions = [session for day in plan["days"] for session in day["sessions"]]
+    building = [session for session in sessions if session["zone"] == "Z3"]
+    assert len(building) == 2
+    assert all(planning_development.is_developmental(session) for session in building)
+    frequency = plan["allocation"]["development"]["segments"][0]
+    assert frequency["planned"] == 2 and frequency["minimum_shortfall"] == 0
+    assert sum(session["zone"] == "Z2" for session in sessions) == expected_supplements
+    for session in building:
+        work = [block for block in session["blocks"] if block["kind"] == "WORK"]
+        assert len(work) >= 2 and all(6. <= block["duration_min"] <= 12. for block in work)
+    if available == 60:
+        # A 2-minute supplement previously shrank each legal 34.5-minute
+        # building task to 13 minutes, erasing both developmental occasions.
+        assert all(session["main_work_minutes"] == 34.5 for session in building)
+        assert 90. <= plan["allocation"]["segments"][0]["components"]["Z3"]["coverage_percent"] <= 110.
+    for day in plan["days"]:
+        assert sum(session["total_minutes"] for session in day["sessions"]) <= available+.005
+    assert_segment_contract(plan)
+    assert_daily_limits(plan)
+
+
 def test_recovery_keeps_complementary_support_and_only_maintenance(monkeypatch):
     fixed_readiness(monkeypatch, 100.)
     profile = configured()

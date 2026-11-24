@@ -74,6 +74,21 @@ def test_budget_trial_is_identical_to_full_copies_without_mutating_sources(monke
     assert prescribe(engine._copy_method_budget(method), engine._copy_capacity_budget(capacity), settings, role) == expected
 
 
+@pytest.mark.parametrize("kind", ["native", "continuous", "library", "combined", "strength"])
+@pytest.mark.parametrize("role", ["BUILDING", "MAINTENANCE"])
+def test_daily_contract_keeps_source_recipe_and_resolved_role_independent(monkeypatch, kind, role):
+    method, capacity, settings = budget_fixture(kind, monkeypatch)
+    prepared = prescribe(deepcopy(method), deepcopy(capacity), settings, role)
+    method, capacity = prepared["method"], prepared["capacity"]
+    original = deepcopy((method, capacity))
+    with monkeypatch.context() as patch:
+        patch.setattr(engine, "_copy_method_budget", deepcopy)
+        patch.setattr(engine, "_copy_capacity_budget", deepcopy)
+        expected = engine._daily_intensity_contract(method, capacity, {}, role, None)
+    assert engine._daily_intensity_contract(method, capacity, {}, role, None) == expected
+    assert (method, capacity) == original
+
+
 @pytest.mark.parametrize("kind", ["complete", "canonical", "estimated", "unsupported",
                                    "declared_rest", "conflicting_break", "empty"])
 def test_complete_plan_and_method_sources_match_previous_full_copy_behavior(monkeypatch, kind):
