@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import re
-from time import monotonic
+from time import monotonic, sleep
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -161,6 +161,25 @@ def _read(repository, alias, actor, query, *, reads=None):
     if not isinstance(query,dict) or query.get("kind") not in READ_KINDS:
         raise HTTPException(422,"Неподдържана справка.")
     return assistant_context.read(reads.for_query(query) if reads is not None else repository,alias,access,query,actor=actor)
+
+
+def _await_nutrition(repository, alias, actor, requested, context, reads, started, timeout):
+    """Wait for a queued report without spending another model call.
+
+    Recheck authorization on every poll; preserve the turn's 90-second budget
+    and enough time to synthesize. No foreground scientific calculation.
+    """
+    if requested.get("kind") != "energy" or context.get("reason") != "PREPARED_VIEW_PENDING":
+        return context
+    deadline = min(monotonic() + 12, started + 90 - timeout - 5)
+    for _ in range(4):
+        if monotonic() + 3 > deadline:
+            break
+        sleep(3)
+        context = _read(repository, alias, actor, requested, reads=reads)
+        if context.get("availability") != "PENDING":
+            break
+    return context
 
 
 def _command(reply):
@@ -1138,6 +1157,7 @@ def turn(repository,alias,actor,body,provider=None):
                         continue
                     context=_read(repository,alias,actor,requested,reads=reads)
                     if nutrition_turn and not input_request:
+                        context=_await_nutrition(repository,alias,actor,requested,context,reads,started,max(timeout,40))
                         context=assistant_nutrition.compact_context(context)
                     query_feedback=None
                     # These are separate app forms within the same planning

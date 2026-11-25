@@ -430,12 +430,27 @@ def read(repository, alias, access, query, settings, today, parse_date, *, actor
         q = dict(query)
         if q.get("date"):
             q.update(start=q["date"], end=q["date"])
-        # Only energy supports tomorrow, as a labelled nutritional forecast.
-        parameters = _parameters(q, today + timedelta(days=1), parse_date)
+        from .nutrition_forecast import HORIZON_DAYS
+        parameters = _parameters(q, today + timedelta(days=HORIZON_DAYS), parse_date)
         parameters.pop("sport", None)
         payload = _prepared(repository, alias, "energy", parameters)
+        if (payload.get("availability") == "PENDING" and parameters.get("period_start", "") >= today.isoformat()):
+            # A warm default report already includes the next seven days. Reuse
+            # its fenced values instead of waiting for an identical dated view.
+            ready = _prepared(repository, alias, "energy")
+            first, last = parameters["period_start"], parameters["period_end"]
+            if ready.get("availability") != "PENDING":
+                selected = [d for d in ready.get("days", []) if first <= d["day"] <= last]
+                if len(selected) == (parse_date(last, today) - parse_date(first, today)).days + 1:
+                    payload = {**ready, "days": selected, "period_start": first, "period_end": last}
         if access.get("can_view_plan") is not True:
             payload = {k: v for k, v in payload.items() if k != "race_preparation"}
+            payload = deepcopy(payload)
+            for day in payload.get("days", []):
+                forecast = (day.get("nutrition_basis") or {}).get("forecast")
+                if forecast:
+                    forecast.pop("sessions", None)
+                    forecast.pop("plan_revision", None)
         if not query.get("section") and isinstance(payload.get("days"), list):
             # The menu needs daily totals and targets, not hundreds of chart bins.
             # Explicit section reads still expose the identical saved full report.

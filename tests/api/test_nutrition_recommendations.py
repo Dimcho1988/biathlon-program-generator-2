@@ -125,13 +125,13 @@ def test_future_day_is_target_only_with_no_reported_expenditure_or_activity():
     assert d["targets"]["kcal"] == 2160
     assert d["nutrition_basis"]["window_end"] == "2026-11-19"
     assert d["nutrition_basis"]["available_days"] == 7
-    default_day = s.history(repo, "a", now=NOW)["days"][-1]
+    default_day = next(r for r in s.history(repo, "a", now=NOW)["days"] if r["day"] == str(tomorrow))
     assert d["nutrition_basis"] == default_day["nutrition_basis"]
     assert d["targets"] == default_day["targets"]
     assert "nutrition_basis" in data["menu_guidance"]
     assert data["nutrition_version"] == n.VERSION
     with pytest.raises(HTTPException) as exc:
-        s.history(repo, "a", tomorrow, tomorrow+timedelta(days=1), now=NOW)
+        s.history(repo, "a", tomorrow, DAY+timedelta(days=8), now=NOW)
     assert exc.value.status_code == 422
 
 
@@ -174,5 +174,5 @@ def test_assistant_reads_same_future_targets_basis_preferences_and_explicit_hist
         {"kind":"energy", "date":"2026-11-21", "section":"days.0.nutrition_basis.history"}, now=NOW)
     assert result["data"] == payload["days"][0]["nutrition_basis"]["history"]
     with pytest.raises(HTTPException) as exc:
-        assistant_context.read(repo, "a", access, {"kind":"energy", "date":"2026-11-22"}, now=NOW)
+        assistant_context.read(repo, "a", access, {"kind":"energy", "date":"2026-11-28"}, now=NOW)
     assert exc.value.status_code == 422

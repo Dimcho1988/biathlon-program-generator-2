@@ -120,8 +120,10 @@ def test_history_exposes_proposals_and_approved_targets_to_same_report():
     p = first["race_preparation"][0]
     repo.entries.append(accepted(p))
     second = energy_service.history(repo, "a", now=NOW)
-    assert second["days"][-1]["targets"] == p["days"][0]["targets"]
-    assert second["days"][-1]["nutrition_basis"]["race_loading"]
+    loading_day = next(d for d in second["days"] if d["day"] == p["days"][0]["day"])
+    assert loading_day["targets"] == p["days"][0]["targets"]
+    assert loading_day["nutrition_basis"]["race_loading"]
+    assert not second["days"][-1]["nutrition_basis"].get("race_loading")
     assert len(second["profiles"]) == 1
 
 
