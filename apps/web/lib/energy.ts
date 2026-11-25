@@ -87,6 +87,7 @@ export type EnergyDay = {
     mean_expenditure_kcal: number | null;
     base_kcal?: number | null;
     anchor_source?: "HISTORICAL_MEAN" | "PLANNED_TRAINING" | "PLANNED_REST";
+    forecast_role?: "INFORMATION_ONLY";
     forecast?: {
       source: "PLANNED_TRAINING" | "PLANNED_REST";
       plan_revision?: number;
