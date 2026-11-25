@@ -39,8 +39,8 @@ from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 from . import plan_speed_comparison
 
-VERSION = "training-management-v81-protected-development-and-replay-reuse"
-PARAMETER_VERSION = "management-parameters-v66"
+VERSION = "training-management-v82-automatic-strength-start"
+PARAMETER_VERSION = "management-parameters-v67"
 MIN_AEROBIC_DOSE_FRACTION = 0.  # Native recipes own their structural minimum; no generic Tmax floor.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -1228,6 +1228,32 @@ def _accents(period, preferences):
     return (manual + [z for z in ordered if z not in manual])[:limit] if mode == "HYBRID" else ordered[:limit]
 
 
+def _strength_role_minutes(method, role, profile, period, settings, *, minimum=False):
+    cap = {"capacity_minutes": method["max_work_min"], "target_hr_bpm": None,
+           "strength_profile": deepcopy(method.get("strength_profile"))}
+    fraction = _nominal_fraction(method, role, profile, period, cap, profile.get("planning_controls"))
+    work = (_minimum_work(method, cap, settings) if minimum else
+            _quantized_work(method, min(method["max_work_min"], cap["capacity_minutes"] * fraction)))
+    return _strength_duration(_blocks(method, work, cap, settings))["main_minutes"]
+
+
+def starting_strength_doses(profile, methods, settings):
+    """One complete maintenance exposure from the enabled catalogue for each phase."""
+    result = {}
+    if not profile.get("strength_enabled") or "STR" in profile.get("component_targets_weekly", {}):
+        return result
+    if not strength_methods.session_limit(profile.get("planning_controls")) or not settings:
+        return result
+    for method in methods:
+        if method["zone"] != "STR":
+            continue
+        for period in method["periods"]:
+            minutes = _strength_role_minutes(method, "MAINTENANCE", profile, period, settings, minimum=True)
+            if minutes > 0 and (period not in result or minutes < result[period]["minutes"]):
+                result[period] = {"minutes": minutes, "method_id": method["id"]}
+    return result
+
+
 def _goals(profile, day, period, taper, reference, accents, week, length, rows, today, limited, taper_factor, progression=None, *, periodization=None, support_limited=None, actual_reference=None, support_readiness=None):
     automatic = load_progression.accents(profile, period, list(PRIORITIES.get(period, ("Z1",))))
     state = planning_controls.resolve(profile, day, period, automatic, periodization=periodization, taper=taper)
@@ -1249,6 +1275,16 @@ def _goals(profile, day, period, taper, reference, accents, week, length, rows, 
         actual_reference = planning_controls.reference(rows, today)
     goals = planning_controls.goals(profile, state, actual_reference, legacy,
                                      limited=limited, taper_factor=taper_factor)
+    # Seed a planning objective only. Actual C40, recovery and completed load stay measured.
+    starter = profile.get("_starting_strength_doses", {}).get(period)
+    base = actual_reference["STR"]
+    if (starter and base["known"] and base["c40"] == 0 and goals["STR"]["target"] == 0
+            and not (limited or support_limited) and not (state and state["explicit"])):
+        shape = (min(1., state["wave_factor"]) * taper_factor if state else goals["STR"]["factor"])
+        target = starter["minutes"] * shape
+        goals["STR"].update(target=target, reference=starter["minutes"], factor=shape,
+                            target_index=(base["b50"] + target/7) / base["b50"],
+                            basis="INITIAL_STRENGTH_METHOD", starting_method_id=starter["method_id"])
     goals = load_progression.apply(goals, profile, state, progression, day, period, taper, limited,
                                    taper_factor, actual_reference)
     goals = mesocycle_focus.cap_recovery(goals, profile, state, actual_reference)
@@ -2186,6 +2222,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     recorded_sessions = training_sessions.with_confirmed_methods(recorded_sessions,
         profile["_method_progression"]["observations"])
     methods = method_registry.executable_methods(profile, speed_by_sport, legacy_methods=methods, race_reference=event_reference)
+    profile["_starting_strength_doses"] = starting_strength_doses(profile, methods, settings)
     method_days = {}
     def methods_for_day(day):
         event_profile = race_course.apply_event(original_event_profile, events, day)
@@ -2676,6 +2713,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         method = registered.get((sport, method["id"]+"-SHORT"))
                         if method is None or not method_registry.enabled(profile, method):
                             continue
+                if method["zone"] == "STR" and day_goals[d][0]["STR"].get("starting_method_id"):
+                    method = {**method, "purpose": "MAINTENANCE"}
                 identity = (sport, method["id"])
                 if identity not in seen_candidates:
                     candidates.append((sport, method))
@@ -4878,10 +4917,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             if method["zone"] != "STR":
                 continue
             for role in role_q:
-                cap = {"capacity_minutes": method["max_work_min"], "target_hr_bpm": None, "strength_profile": deepcopy(method.get("strength_profile"))}
-                nominal = _nominal_fraction(method, role, profile, "GENERAL_PREPARATION", cap, controls)
-                blocks = _blocks(method, _quantized_work(method, min(method["max_work_min"], cap["capacity_minutes"]*nominal)), cap, settings)
-                role_q[role] = max(role_q[role], sum(b["duration_min"] for b in blocks if b["zone"] == "STR"))
+                role_q[role] = max(role_q[role], _strength_role_minutes(
+                    method, role, profile, "GENERAL_PREPARATION", settings))
         strength_bounds = []
         for segment in allocation_report.get("segments") or [allocation_report]:
             first, last = segment["window_start"], segment["window_end"]

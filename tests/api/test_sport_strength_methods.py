@@ -145,3 +145,31 @@ def test_taper_power_is_activation_with_same_reduced_budget(monkeypatch):
     for session in sessions:
         assert session["purpose"] == session["dose_evidence"]["resolved_role"] == "ACTIVATION"
         assert .5 <= session["dose_evidence"]["strength_prescription"]["dose_fraction"] <= .6
+
+
+def test_empty_strength_goal_creates_a_whole_session_without_fabricating_history(monkeypatch):
+    repo = Repository()
+    for row in repo.envelope["snapshot_payload"]["load_history"]["strength"]["daily"]:
+        row.update(effective_load=0., equivalent_time_min=0., real_time_min=0.)
+    p = body(max_strength_sessions=2, sessions_per_week=7)
+    p.update(strength_enabled=True, component_targets_weekly={})
+    plan = run(monkeypatch, p, repo)
+    segment = plan["allocation"]["segments"][0]
+    strength = segment["components"]["STR"]
+    outlook = plan["long_term"]["weeks"][0]["components"]["STR"]
+    assert 0 < strength["target_q"] == outlook["target_weekly_q"]
+    assert strength["actual_q"] == plan["long_term"]["baseline"]["STR"]["c40"] == 0
+    sessions = [s for d in plan["days"] if d["date"] <= segment["window_end"]
+                for s in d["sessions"] if s["zone"] == "STR"]
+    assert len(sessions) == 1 and sessions[0]["purpose"] == "MAINTENANCE"
+    assert strength["lower_acceptable"] <= strength["planned_q"] <= strength["upper_acceptable"]
+    assert strength["planned_q"] == pytest.approx(sessions[0]["strength_duration"]["main_minutes"])
+    assert p["component_targets_weekly"] == {}
+
+
+@pytest.mark.parametrize("enabled, quota, manual", [
+    (True, 2, {"STR": 0}), (True, 2, {"STR": 35}), (False, 2, {}), (True, 0, {})])
+def test_starter_respects_explicit_profile_choices(enabled, quota, manual):
+    p = body(max_strength_sessions=quota)
+    p.update(strength_enabled=enabled, component_targets_weekly=manual)
+    assert not engine.starting_strength_doses(p, strength_methods.methods(p), Repository().settings)
