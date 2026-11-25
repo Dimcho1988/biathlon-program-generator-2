@@ -108,7 +108,7 @@ function ProfileForm({ data, day, canEdit }: { data: EnergyHistory; day: EnergyD
 export function EnergyDashboard({ data, canEdit }: { data: EnergyHistory; canEdit: boolean }) {
   const [selected, setSelected] = useState(data.days.find(d => d.day === data.tomorrow)?.day
     ?? data.days.filter(d => d.day < data.today && dailyValue(d)).at(-1)?.day ?? data.days.at(-1)?.day ?? "");
-  const [view, setView] = useState<"energy" | "g" | "kcal" | "fuel_g" | "fuel_kcal">("energy");
+  const [view, setView] = useState<"energy" | "g" | "kcal" | "fuel_g" | "fuel_kcal">(data.period_start > data.today ? "kcal" : "energy");
   const day = data.days.find(d => d.day === selected) ?? data.days.at(-1);
   const fuel = view === "fuel_g" || view === "fuel_kcal";
   const fuelUnit = view === "fuel_g" ? "g" : "kcal";
@@ -125,9 +125,10 @@ export function EnergyDashboard({ data, canEdit }: { data: EnergyHistory; canEdi
     <section className="energy-panel">
       <form method="get" className="energy-period">
         <label>От<input type="date" name="start" required defaultValue={data.period_start} /></label>
-        <label>До<input type="date" name="end" max={data.tomorrow ?? data.today} required defaultValue={data.period_end} /></label>
+        <label>До<input type="date" name="end" max={data.forecast_until ?? data.tomorrow ?? data.today} required defaultValue={data.period_end} /></label>
         <button className="action-button secondary">Покажи</button>
       </form>
+      {data.forecast_until && data.tomorrow && <Link href={`/energy?start=${data.tomorrow}&end=${data.forecast_until}`} className="action-button secondary">Прогноза за следващите 7 дни</Link>}
       <div className="energy-heading"><h2>Дневна динамика</h2>
         <label>Показател<select value={view} onChange={e => setView(e.target.value as typeof view)}>
           <option value="energy">Енергоразход · kcal</option>
@@ -140,7 +141,7 @@ export function EnergyDashboard({ data, canEdit }: { data: EnergyHistory; canEdi
       <p className="energy-caption">{view === "energy"
         ? "Щрихованите колони показват само оценената част. Липсващ разход не означава нула."
         : fuel ? "Оценени окислени въглехидрати и мазнини за отчетената част от деня. Белтъчините са показани отделно като цел за прием."
-        : "Цели за прием според предходните 7 завършени дни с корекция 25% от отклонението на последния ден. За утре целта е предварителна."}</p>
+        : "Предварителни цели според планираните тренировки или последните 7 завършени дни, с корекция 25% от отклонението на последния завършен ден."}</p>
       <div className="energy-bars" role="group" aria-label="Избери ден от графиката">
         {data.days.map(d => <button key={d.day} type="button" className={`energy-daybar ${(view === "energy" || fuel ? d.total : d.targets?.kcal) ? "" : "partial"} ${selected === d.day ? "selected" : ""}`}
           aria-label={`${d.day}: ${view === "energy" ? `${n(dailyValue(d)?.kcal)} kcal, ${dailyLabel(d, data.today)}` : fuel ? fuelLabel(d) : macros.map(([k, label]) => `${label} ${n(d.targets?.[`${k}_g`])} g`).join(", ")}`}
@@ -182,6 +183,7 @@ export function EnergyDashboard({ data, canEdit }: { data: EnergyHistory; canEdi
         {day.targets?.kcal != null && <div className="energy-total"><span>Препоръчителен прием</span>
           <strong>{n(day.targets.kcal)} <small>kcal</small></strong></div>}
         {day.nutrition_basis && <>
+          {day.nutrition_basis.forecast && <p>Прогнозен разход: {n(day.nutrition_basis.forecast.kcal)} kcal · извън тренировките: {n(day.nutrition_basis.forecast.outside_kcal)} kcal · планирани тренировки: {n(day.nutrition_basis.forecast.activity_kcal)} kcal.</p>}
           <p>Среден разход: {n(day.nutrition_basis.mean_expenditure_kcal)} kcal · корекция: {(day.nutrition_basis.correction_kcal ?? 0) > 0 ? "+" : ""}{n(day.nutrition_basis.correction_kcal)} kcal.</p>
           <p className="energy-caption">История: {day.nutrition_basis.window_start} – {day.nutrition_basis.window_end} · {day.nutrition_basis.available_days}/7 дни.
             {day.nutrition_basis.deviation_percent != null && <> Последният ден: {day.nutrition_basis.deviation_percent > 0 ? "+" : ""}{n(day.nutrition_basis.deviation_percent, 1)}% спрямо средното; използвани са 25% от отклонението.</>}</p>

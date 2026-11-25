@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 import React, {act} from "react";
 import {createRoot} from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { parseEnergy, type EnergyHistory } from "../lib/energy";
+import { parseEnergy, projectEnergy, type EnergyHistory, type EnergyDay } from "../lib/energy";
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 vi.mock("next/link", () => ({
   default: ({ children, ...props }: React.ComponentProps<"a">) => (
@@ -86,6 +86,31 @@ describe("energy review", () => {
   it("rejects incompatible report shapes", () => {
     expect(() => parseEnergy({ days: [] })).toThrow();
     expect(parseEnergy(data)).toBe(data);
+  });
+  it("opens the seven-day target view and excludes private plan summaries", () => {
+    const basis: NonNullable<EnergyDay["nutrition_basis"]> = {
+      version: "nutrition-seven-day-plan-forecast-v3", status: "AVAILABLE", target_day: "2026-11-20",
+      provisional: true, window_start: "2026-11-12", window_end: "2026-11-18", available_days: 7,
+      missing_days: [], mean_expenditure_kcal: 2700, last_day_expenditure_kcal: 2700,
+      deviation_kcal: 0, deviation_percent: 0, correction_factor: .25, correction_kcal: 0,
+      nonprotein_carbohydrate_fraction: null, weight_kg: 70, history: [], notes: [],
+      food_preferences: { allergies: "ядки", preferences: "" }, anchor_source: "PLANNED_TRAINING",
+      forecast: { source: "PLANNED_TRAINING", plan_revision: 4, kcal: 2800, outside_kcal: 2000,
+        activity_kcal: 800, duration_s: 3600, sessions: [{title:"Private session", sport:"Run",zone:"Z2",duration_min:60,kcal:800,methods:["PLANNED_HR"]}] }
+    };
+    const report = { ...data, tomorrow: "2026-11-20", forecast_until: "2026-11-26",
+      period_start: "2026-11-20", period_end: "2026-11-26",
+      days: [{ ...data.days[0], day: "2026-11-20", status: "FORECAST", nutrition_basis: basis }] };
+    const projected = projectEnergy(report, false);
+    expect(projected.days[0].nutrition_basis?.forecast).not.toHaveProperty("sessions");
+    expect(projected.days[0].nutrition_basis?.forecast).not.toHaveProperty("plan_revision");
+    expect(report.days[0].nutrition_basis.forecast?.sessions).toHaveLength(1);
+    const html = renderToStaticMarkup(<EnergyDashboard data={projected} canEdit={false}/>);
+    expect(html).toContain("Прогноза за следващите 7 дни");
+    expect(html).toContain('max="2026-11-26"');
+    expect(html).toContain("Прогнозен разход");
+    expect(html).not.toContain("Общ дневен разход");
+    expect(html).toMatch(/value="kcal" selected=""/);
   });
   it("shows one dietary protein target and never the oxidation amount", () => {
     const accounted = { kcal: 2400, carbohydrate_kcal: 1200, fat_kcal: 900, protein_kcal: 300,

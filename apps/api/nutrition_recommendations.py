@@ -8,16 +8,21 @@ from datetime import timedelta
 
 from . import energy_model as model
 
-VERSION = "nutrition-fixed-fat-race-loading-v2"
+VERSION = "nutrition-seven-day-plan-forecast-v3"
 CORRECTION = 0.25
 
-MENU_GUIDANCE = """За меню прочети energy за датата на препоръката (date), включително утре.
+MENU_GUIDANCE = """За меню прочети energy за датата (date) или периода (start/end), до 7 дни напред.
 Използвай days[].targets и nutrition_basis за тази дата, а не разхода за същия ден.
-Целта = среден разход за предходните 7 завършени календарни дни + 0,25 ×
+При липса на бъдещ план целта = среден разход за предходните 7 завършени календарни дни + 0,25 ×
 (разход през последния завършен ден − средното). Корекцията е симетрична.
 Периодът, използваните дни, средното и корекцията са в nutrition_basis.
 При LIMITED_HISTORY посочи кратко броя налични дни; липсващите дни не са нули.
-За утре, докато днес не е завършил, целта е предварителна и използва историята до вчера.
+За бъдещите дни историята завършва вчера и не включва прогнозни стойности.
+При nutrition_basis.forecast базата е разходът извън тренировките за оставащото
+време плюс разходът на планираните сесии. Тя замества историческото средно;
+същата корекция от последния завършен ден се добавя веднъж, без натрупване напред.
+PLANNED_REST е изрична почивка; липсващ план използва историческата база.
+forecast.sessions съдържа разрешеното обобщение на плана за всяка дата.
 Ако последният завършен ден няма пълна оценка, няма дневна корекция; използва се
 средното на наличните пълни дни в същия седемдневен прозорец. Не измисляй липсващи данни.
 Ако targets.kcal липсва, не задавай количествена калорийна или въглехидратна/мастна цел.
@@ -39,9 +44,9 @@ MENU_GUIDANCE = """За меню прочети energy за датата на п
 Провери nutrition_basis.food_preferences за датираните алергии, непоносимости и предпочитания.
 Не питай повторно за вече посоченото; при неуточнени алергии попитай преди лично меню.
 Когато има достъп до плана, прочети day за същата дата и съобрази часовете и
-подкрепянето преди/по време/след тренировка. Базовата цел не отчита бъдещия план:
-ако предстоящото натоварване изисква друго, обясни го като отделно предложение;
-не представяй промяната като резултат на записаната формула.
+подкрепянето преди/по време/след тренировка. При седмично меню използвай
+forecast.sessions от общата справка; не е нужно отделно прочитане на всеки ден.
+Не приемай предписания пулс за измерен или прогнозния разход за отчетен.
 Дай храни, порции, сурово/сготвено тегло и приблизителни kcal и макронутриенти по
 хранения и общо. Храната и напитките по време на тренировка участват в дневния сбор.
 Провери сборовете спрямо targets. Няма автоматична проверка по хранителна база;
@@ -52,7 +57,7 @@ references са източници за описаните допускания,
 """
 
 
-def recommend(day, today, days, profile):
+def recommend(day, today, days, profile, *, forecast=None):
     """Return auditable inputs and targets; an unfinished day cannot be a donor."""
     last = min(day - timedelta(days=1), today - timedelta(days=1))
     first = last - timedelta(days=6)
@@ -71,23 +76,37 @@ def recommend(day, today, days, profile):
     previous = next((r for r in used if r["day"] == last.isoformat()), None)
     difference = previous["kcal"] - mean if previous else None
     correction = CORRECTION * difference if difference is not None else 0.0
-    kcal = mean + correction if mean is not None else None
+    forecast = forecast if day >= today else None
+    base = forecast["kcal"] if forecast is not None else mean
+    kcal = base + correction if base is not None else None
     weight = profile.get("weight_kg")
     adult = bool(profile.get("birth_year") and day.year - profile["birth_year"] - 1 >= 18)
     targets = model.dietary_targets(kcal, weight, 0, adult)
     if targets:
-        targets["protein_basis"] = "SEVEN_DAY_ENERGY_RULE" if kcal is not None else "INCOMPLETE_DAY_FALLBACK"
+        targets["protein_basis"] = "PLANNED_ENERGY_RULE" if forecast else "SEVEN_DAY_ENERGY_RULE" if kcal is not None else "INCOMPLETE_DAY_FALLBACK"
         targets["allocation_note"] = (
             "Цел за прием: среден дневен разход за предходните 7 завършени дни плюс 25% от отклонението на последния ден. "
             "Белтъчини: 1,6–1,9 g/kg според целевите kcal/kg. Мазнини: 25% от целевите kcal; въглехидрати: остатъкът. "
-            "Работна препоръка, без индивидуална валидация; не отчита автоматично предстоящата тренировка."
+            "Работна препоръка, без индивидуална валидация."
             if kcal is not None else
             "Няма завършени дни с пълна оценка в предходния седемдневен период. Резервна белтъчна цел 1,8 g/kg."
         )
-    status = "AVAILABLE" if len(used) == 7 else "LIMITED_HISTORY" if used else "UNAVAILABLE"
+        if forecast:
+            targets["allocation_note"] = (
+                "Цел за прием от планираните сесии и разхода извън тях плюс 25% от отклонението на последния завършен ден. "
+                "Белтъчини: 1,6–1,9 g/kg. Мазнини: 25% от целевите kcal; въглехидрати: остатъкът. Работна прогноза."
+            )
+    status = "AVAILABLE" if len(used) == 7 else "LIMITED_HISTORY" if used or forecast else "UNAVAILABLE"
     notes = []
     if day > today:
         notes.append(f"Предварителна цел: днешният ден не е завършен; историята е до {last.isoformat()}.")
+    if forecast:
+        notes.append("Основата е планирана почивка." if forecast["source"] == "PLANNED_REST" else
+                     "Основата включва планираните тренировки. Не добавяй тренировъчните калории повторно.")
+    elif day > today:
+        notes.append("Няма приложим план за тази дата; използвана е историческата оценка, без да се приема почивка.")
+    if day > today + timedelta(days=1):
+        notes.append("Корекцията е от същия последен завършен ден; прогнозите не участват като нови наблюдения.")
     if missing:
         notes.append(f"Използвани са {len(used)} от 7 дни с пълна оценка; липсващите дни не се приемат за нула.")
     if previous is None:
@@ -97,13 +116,15 @@ def recommend(day, today, days, profile):
         "provisional": day > today, "window_start": first.isoformat(),
         "window_end": last.isoformat(), "available_days": len(used),
         "missing_days": missing, "mean_expenditure_kcal": mean,
+        "anchor_source": forecast["source"] if forecast else "HISTORICAL_MEAN",
+        "base_kcal": base, "forecast": forecast,
         "last_day_expenditure_kcal": previous["kcal"] if previous else None,
         "deviation_kcal": difference,
         "deviation_percent": 100 * difference / mean if difference is not None and mean else None,
         "correction_factor": CORRECTION,
-        "correction_kcal": correction if mean is not None else None,
+        "correction_kcal": correction if base is not None else None,
         "nonprotein_carbohydrate_fraction": None,
-        "fat_energy_fraction": 0.25 if used else None,
+        "fat_energy_fraction": 0.25 if base is not None else None,
         "weight_kg": weight, "history": used, "notes": notes,
         "food_preferences": {k: profile.get(k, "") for k in ("preferences", "allergies")},
     }

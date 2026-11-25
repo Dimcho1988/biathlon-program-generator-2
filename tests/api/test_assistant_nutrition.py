@@ -191,6 +191,34 @@ def test_unknown_nutrition_form_is_recovered_without_reading_or_writing_it(repo)
     assert "Примерно меню" in result["message"] and not repo.writes
 
 
+def test_pending_report_is_polled_without_another_model_call(repo, monkeypatch):
+    pending = {"query_kind": "energy", "availability": "PENDING", "reason": "PREPARED_VIEW_PENDING"}
+    results = iter([pending, pending, energy()])
+    repo.read_result = lambda q: next(results)
+    waits = []
+    monkeypatch.setattr(service, "sleep", lambda t: waits.append(t))
+    provider = ScriptedAssistantProvider([{ "text": "", "query": query("energy", date=DAY)}, {"text": "Меню според 2800 kcal."}])
+    result = service.turn(repo, ALIAS, ACTOR, body("Меню за утре"), provider)
+    assert len(provider.calls) == 2 and len(repo.reads) == 3 and waits == [3, 3]
+    assert provider.calls[-1]["context"]["results"][0]["availability"] == "AVAILABLE"
+    assert "2800" in result["message"] and not repo.writes
+
+
+def test_pending_wait_respects_deadline_and_rechecks_permissions(repo, monkeypatch):
+    pending = {"availability": "PENDING", "reason": "PREPARED_VIEW_PENDING"}
+    monkeypatch.setattr(service, "monotonic", lambda: 48)
+    monkeypatch.setattr(service, "sleep", lambda t: pytest.fail("No time for waiting"))
+    assert service._await_nutrition(repo, ALIAS, ACTOR, query("energy"), pending, None, 0, 40) == pending
+    monkeypatch.setattr(service, "monotonic", lambda: 0)
+    def revoke(_):
+        repo.permissions = {}
+    monkeypatch.setattr(service, "sleep", revoke)
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException):
+        service._await_nutrition(repo, ALIAS, ACTOR, query("energy"), pending, None, 0, 40)
+    assert not repo.reads
+
+
 def test_nutrition_tool_schema_cannot_grant_plan_access():
     provider = OpenAIAssistantProvider(OpenAIProviderConfig(api_key="unused-test-key"))
     payload = provider._payload([{"role": "user", "content": "Искам меню"}],

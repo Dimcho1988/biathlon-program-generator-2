@@ -85,6 +85,14 @@ export type EnergyDay = {
     available_days: number;
     missing_days: string[];
     mean_expenditure_kcal: number | null;
+    base_kcal?: number | null;
+    anchor_source?: "HISTORICAL_MEAN" | "PLANNED_TRAINING" | "PLANNED_REST";
+    forecast?: {
+      source: "PLANNED_TRAINING" | "PLANNED_REST";
+      plan_revision?: number;
+      kcal: number; outside_kcal: number; activity_kcal: number; duration_s: number;
+      sessions?: { title: string; sport: string; zone: string; duration_min: number; kcal: number; methods: string[] }[];
+    } | null;
     last_day_expenditure_kcal: number | null;
     deviation_kcal: number | null;
     deviation_percent: number | null;
@@ -102,7 +110,7 @@ export type EnergyDay = {
     kcal: number | null;
     protein_g_per_kg: number;
     energy_kcal_per_kg: number | null;
-    protein_basis: "DAILY_ENERGY_RULE" | "SEVEN_DAY_ENERGY_RULE" | "INCOMPLETE_DAY_FALLBACK";
+    protein_basis: "DAILY_ENERGY_RULE" | "SEVEN_DAY_ENERGY_RULE" | "PLANNED_ENERGY_RULE" | "INCOMPLETE_DAY_FALLBACK";
     protein_g: number;
     carbohydrate_g: number | null;
     fat_g: number | null;
@@ -123,6 +131,7 @@ export type EnergyHistory = {
   period_end: string;
   today: string;
   tomorrow?: string;
+  forecast_until?: string;
   nutrition_version?: string;
   race_preparation?: RacePreparation[];
   timezone: string;
@@ -155,4 +164,16 @@ export function parseEnergy(raw: unknown): EnergyHistory {
       throw new Error("Невалиден дневен отчет.");
   }
   return r;
+}
+
+export function projectEnergy(data: EnergyHistory, canViewPlan: boolean): EnergyHistory {
+  if (canViewPlan) return data;
+  return { ...data, race_preparation: [], days: data.days.map(day => {
+    const basis = day.nutrition_basis;
+    if (!basis?.forecast) return day;
+    const forecast = { ...basis.forecast };
+    delete forecast.sessions;
+    delete forecast.plan_revision;
+    return { ...day, nutrition_basis: { ...basis, forecast } };
+  }) };
 }

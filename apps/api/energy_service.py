@@ -10,6 +10,7 @@ from .response_service import ResponseStore
 from . import energy_model as model
 from . import nutrition_recommendations as nutrition
 from . import race_nutrition
+from . import nutrition_forecast
 
 
 class NutritionProfile(InputModel):
@@ -139,10 +140,11 @@ def history(repository, alias, start=None, end=None, now=None):
     )
     today = evaluated_at.date()
     tomorrow = today + timedelta(days=1)
-    end = end or tomorrow
-    start = start or end - timedelta(days=29)
-    if start <= date.min + timedelta(days=8) or start > end or (end - start).days >= 90 or end > tomorrow:
-        raise HTTPException(422, "Изберете период от 1 до 90 дни до утре включително.")
+    forecast_until = today + timedelta(days=nutrition_forecast.HORIZON_DAYS)
+    end = end or forecast_until
+    start = start or min(end, tomorrow) - timedelta(days=29)
+    if start <= date.min + timedelta(days=8) or start > end or (end - start).days >= 90 or end > forecast_until:
+        raise HTTPException(422, "Изберете период от 1 до 90 дни, най-много 7 дни напред.")
     # Fetch the same donors even for a single-day request or a changed chart range.
     history_start = min(start, today) - timedelta(days=7)
     entries = ResponseStore(repository).entries(alias)
@@ -424,15 +426,22 @@ def history(repository, alias, start=None, end=None, now=None):
             },
         )
     visible_days = [d for key, d in days.items() if key >= str(start)]
+    plan = nutrition_forecast.active_plan(repository, alias) if end >= today else None
+
+    def recommend(day):
+        profile = resolved_profile(entries, wellness, imported, day)
+        midnight = datetime.combine(day, datetime.min.time(), ZoneInfo(settings.timezone))
+        next_midnight = datetime.combine(day + timedelta(days=1), datetime.min.time(), ZoneInfo(settings.timezone))
+        seconds = (next_midnight.astimezone(timezone.utc) - midnight.astimezone(timezone.utc)).total_seconds()
+        forecast = nutrition_forecast.estimate(plan, day, profile, at(settings, day),
+            resting(profile, profile.get("weight_kg"), day)[0], seconds) if day >= today else None
+        return nutrition.recommend(day, today, days, profile, forecast=forecast)
+
     for d in visible_days:
         day = date.fromisoformat(d["day"])
-        d["targets"], d["nutrition_basis"] = nutrition.recommend(
-            day, today, days, resolved_profile(entries, wellness, imported, day)
-        )
+        d["targets"], d["nutrition_basis"] = recommend(day)
     race_calendar = race_nutrition.events(repository, alias)
-    race_preparation = race_nutrition.proposals(race_calendar, entries, today,
-        lambda day: nutrition.recommend(day, today, days,
-            resolved_profile(entries, wellness, imported, day))) if end >= today else []
+    race_preparation = race_nutrition.proposals(race_calendar, entries, today, recommend) if end >= today else []
     race_nutrition.apply_accepted(visible_days, entries, race_calendar, today)
     latest = profile_on(entries, end)
     profile = resolved_profile(entries, wellness, imported, end)
@@ -449,6 +458,7 @@ def history(repository, alias, start=None, end=None, now=None):
         "period_end": str(end),
         "today": str(today),
         "tomorrow": str(tomorrow),
+        "forecast_until": str(forecast_until),
         "timezone": settings.timezone,
         "evaluated_at": evaluated_at.isoformat(),
         "generation_id": calendar.get("generation_id"),
@@ -477,8 +487,9 @@ def history(repository, alias, start=None, end=None, now=None):
             "Белтъчини: 3,28% от енергията при активност и 0,81 mg/kg/min извън нея са групови ориентири, не индивидуални измервания. Прилагането им към кратки/интервални активности е екстраполация.",
             "Извън активности: разходът в покой × оставащото време × избрания фактор. Въглехидратният дял е допускане от профила. Крачките не се добавят втори път.",
             "Грамовете са енергийни еквиваленти (4/9/4 kcal/g), не измерена загуба на тъкани. Хранителният прием се препоръчва отделно.",
-            "Дневният разход предполага, че всички активности са записани. Хранителната цел е отделна прогноза от предходните 7 завършени дни: среден разход плюс 25% от положителното или отрицателното отклонение на последния ден. Текущите частични данни не участват. За утре целта е предварителна до приключване на днешния ден.",
-            "При липсващи дни се използват наличните пълни дни в същия седемдневен период, без нулево попълване. При липса на пълен последен ден няма корекция. Коефициентът 0,25 не гарантира точност и не е физиологично валидиран. Бъдещата тренировъчна програма не променя автоматично тази цел.",
+            "Дневният отчет предполага, че всички активности са записани. Хранителната прогноза е до 7 дни напред: публикуван план или среден разход от последните 7 завършени дни плюс 25% от отклонението на последния завършен ден. Частични и прогнозни дни не участват в историята; корекцията не се натрупва рекурсивно.",
+            "Планираните сесии се оценяват по предписания пулс, средата на зоната или резервен MET ориентир; силата използва MET за цялата сесия. Разходът извън сесиите обхваща само оставащото време. Изрична почивка означава нулев тренировъчен разход; липсващ или неприложим план използва историческата база.",
+            "При липсващи дни се използват наличните пълни дни в същия седемдневен период, без нулево попълване. При липса на пълен последен ден няма корекция. Коефициентът 0,25 и оценката от планирания пулс не гарантират индивидуална точност и не са независимо валидирани.",
             "Хранителни белтъчини: 1,6 g/kg до 40 целеви kcal/kg; линейно до 1,9 g/kg при 80 kcal/kg; над това 1,9 g/kg. Без завършена история — резервни 1,8 g/kg. Мазнини: 25% от целевите kcal. Въглехидрати: остатъкът. Това са работни правила, отделни от оцененото окисление.",
             "Преди старт над 90 min може да се предложи зареждане за предходните два дни. Начална цел 10 g/kg от препоръчителните 10–12 g/kg/ден за 36–48 h (Thomas, Erdman и Burke, 2016). Временният дял 20–25% мазнини е избор на приложението. Приемането запазва конкретните цели само за показаните дни; отказът, преместен или отменен старт не активира зареждане.",
         ],

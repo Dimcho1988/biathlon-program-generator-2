@@ -29,6 +29,17 @@ def number(x):
     return isinstance(x, (int, float)) and not isinstance(x, bool) and isfinite(x)
 
 
+def hr_energy_rate(fraction, sex, weight, resting_rate):
+    """Shared kcal/min fit and low-intensity bridge, for observed or planned HR."""
+    def fit(f):
+        return weight * (-0.09354289849186385 + 0.3984908361869844 * f
+                         - 0.04590881586125497 * (sex == "FEMALE"))
+    if fraction >= .5:
+        return max(resting_rate, fit(min(1., fraction)))
+    alpha = min(1., max(0., (fraction - .3) / .2))
+    return resting_rate + alpha * (max(resting_rate, fit(.5)) - resting_rate)
+
+
 def cho_fraction(hr_fraction, sex):
     if (
         sex not in COEFFICIENTS
@@ -132,8 +143,7 @@ def activity(shadow, *, sex, weight, hrmax, bounds, sport, parameters, duration_
                           or sport_key(sport) in {"walk", "walking", "hike", "hiking"})
 
     def regression_rate(fraction):
-        return weight * (-0.09354289849186385 + 0.3984908361869844 * fraction
-                         - 0.04590881586125497 * (sex == "FEMALE"))
+        return hr_energy_rate(fraction, sex, weight, resting_rate)
 
     def estimate(h, s, paused, dt):
         hr = h.get("hr_bpm") if h else None

@@ -22,7 +22,8 @@ export default async function EnergyPage({
   let data: EnergyHistory;
   try {
     data = await getEnergyHistory(access.athleteAlias, q.start, q.end);
-    if (!(access.isOwner || access.canViewPlan)) data = { ...data, race_preparation: [] };
+    const { projectEnergy } = await import("../../lib/energy");
+    data = projectEnergy(data, access.isOwner || access.canViewPlan === true);
   } catch (e) {
     return (
       <ErrorState
