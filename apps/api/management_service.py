@@ -189,6 +189,9 @@ def outlook(repository, alias, *, now=None):
         limited = False
         volume = {**volume, "missing_history": False, "reported_history_only": False,
                   "weekly_volume_source": "CONFIRMED_RETURN_COMPONENT_Q"}
+    if profile.get("strength_enabled") and "STR" not in profile.get("component_targets_weekly", {}):
+        methods = engine.method_registry.executable_methods(profile, speed_by_sport)
+        profile["_starting_strength_doses"] = engine.starting_strength_doses(profile, methods, settings)
     projection = engine._long_term_outlook(profile, phases, reference, accents, preferences, rows, today,
                                          limited, volume=volume, events=calendar["events"], progression=progression, planning_evidence=planning_evidence)
     return {"configured": True, "outlook": {
