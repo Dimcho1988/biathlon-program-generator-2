@@ -20,14 +20,16 @@ def estimate(p):
     return f.estimate(p, DAY + timedelta(days=1), repo.entries[0]["payload"], repo.settings, 1800)
 
 
-def test_planned_gross_energy_replaces_history_workout_and_excludes_resting_time():
+def test_planned_energy_is_separate_and_excludes_resting_time():
     predicted = estimate(plan())
     rate = m.hr_energy_rate(.7, "FEMALE", 68, 1800/1440)
     assert predicted["activity_kcal"] == pytest.approx(rate * 60)
     assert predicted["outside_kcal"] == pytest.approx(1800 * 23/24 * 1.2)
     targets, basis = n.recommend(DAY+timedelta(days=1), DAY, week(4110), PROFILE, forecast=predicted)
-    assert targets["kcal"] == pytest.approx(predicted["kcal"] + 277.5)
+    assert targets["kcal"] == 3277.5
     assert basis["mean_expenditure_kcal"] == 3000
+    assert basis["base_kcal"] == 3000 and basis["anchor_source"] == "HISTORICAL_MEAN"
+    assert basis["forecast"] == predicted and basis["forecast_role"] == "INFORMATION_ONLY"
     assert targets["kcal"] != pytest.approx(3000 + predicted["activity_kcal"] + 277.5)
     assert sum(targets[k+"_g"] * m.FACTORS[k] for k in m.MACROS) == pytest.approx(targets["kcal"])
 
@@ -84,11 +86,15 @@ def test_seven_day_range_matches_single_dates_and_never_reports_forecasts_as_act
         assert row == single
         assert row["total"] is None and row["outside"] is None and not row["activities"]
         assert row["nutrition_basis"]["window_end"] == "2026-11-19"
-    assert [d["nutrition_basis"]["anchor_source"] for d in report["days"][:3]] == ["PLANNED_TRAINING", "PLANNED_REST", "HISTORICAL_MEAN"]
+    assert {d["nutrition_basis"]["anchor_source"] for d in report["days"]} == {"HISTORICAL_MEAN"}
+    assert all(d["targets"] == report["days"][0]["targets"] for d in report["days"])
+    assert report["days"][0]["nutrition_basis"]["forecast"]["source"] == "PLANNED_TRAINING"
+    assert report["days"][1]["nutrition_basis"]["forecast"]["source"] == "PLANNED_REST"
+    assert report["days"][2]["nutrition_basis"]["forecast"] is None
     assert saved == before
 
 
-def test_no_recursive_forecast_donors_and_plan_can_work_without_history():
+def test_no_recursive_forecast_donors_and_plan_cannot_replace_missing_history():
     days = week(4110)
     for i in range(8):
         days[str(DAY+timedelta(days=i))] = {"total": {"kcal": 99999}, "targets": {"kcal": 99999}}
@@ -97,8 +103,34 @@ def test_no_recursive_forecast_donors_and_plan_can_work_without_history():
         assert target["kcal"] == 3277.5 and basis["correction_kcal"] == 277.5
     forecast = estimate(plan())
     target, basis = n.recommend(DAY+timedelta(days=1), DAY, {}, PROFILE, forecast=forecast)
-    assert target["kcal"] == forecast["kcal"] and basis["available_days"] == 0
-    assert basis["correction_kcal"] == 0 and basis["status"] == "LIMITED_HISTORY"
+    assert target["kcal"] is None and basis["available_days"] == 0
+    assert target["protein_g"] == 126 and target["carbohydrate_g"] is None and target["fat_g"] is None
+    assert basis["correction_kcal"] is None and basis["status"] == "UNAVAILABLE"
+    assert basis["forecast"] == forecast
+
+
+@pytest.mark.parametrize("source,kcal", [("PLANNED_REST", 1750), ("PLANNED_TRAINING", 2128), ("PLANNED_TRAINING", 5244)])
+@pytest.mark.parametrize("last", [4110, 1890])
+def test_plan_never_changes_intake_or_macros_in_either_correction_direction(source, kcal, last):
+    history = week(last)
+    original = n.recommend(DAY, DAY, history, PROFILE)[0]
+    forecast = {"source": source, "kcal": kcal}
+    for offset in range(8):
+        target, basis = n.recommend(DAY+timedelta(days=offset), DAY, history, PROFILE, forecast=forecast)
+        assert target == original
+        assert target["protein_basis"] == "SEVEN_DAY_ENERGY_RULE"
+        assert basis["base_kcal"] == 3000 and basis["forecast"] == forecast
+
+
+def test_reported_light_day_case_remains_near_2782_instead_of_2174():
+    history = week(2921)
+    for row in list(history.values())[:-1]:
+        row["total"]["kcal"] = (2736*7-2921)/6
+    target, basis = n.recommend(DAY+timedelta(days=1), DAY, history, PROFILE,
+                                forecast={"source": "PLANNED_TRAINING", "kcal": 2128})
+    assert basis["mean_expenditure_kcal"] == 2736
+    assert basis["correction_kcal"] == 46.25
+    assert target["kcal"] == 2782.25
 
 
 def test_warm_default_report_supplies_exact_future_range_and_hides_plan_details(monkeypatch):

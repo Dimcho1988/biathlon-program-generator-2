@@ -141,7 +141,7 @@ export function EnergyDashboard({ data, canEdit }: { data: EnergyHistory; canEdi
       <p className="energy-caption">{view === "energy"
         ? "Щрихованите колони показват само оценената част. Липсващ разход не означава нула."
         : fuel ? "Оценени окислени въглехидрати и мазнини за отчетената част от деня. Белтъчините са показани отделно като цел за прием."
-        : "Предварителни цели според планираните тренировки или последните 7 завършени дни, с корекция 25% от отклонението на последния завършен ден."}</p>
+        : "Предварителни цели от средния разход за последните 7 завършени дни, с корекция 25% от отклонението на последния завършен ден."}</p>
       <div className="energy-bars" role="group" aria-label="Избери ден от графиката">
         {data.days.map(d => <button key={d.day} type="button" className={`energy-daybar ${(view === "energy" || fuel ? d.total : d.targets?.kcal) ? "" : "partial"} ${selected === d.day ? "selected" : ""}`}
           aria-label={`${d.day}: ${view === "energy" ? `${n(dailyValue(d)?.kcal)} kcal, ${dailyLabel(d, data.today)}` : fuel ? fuelLabel(d) : macros.map(([k, label]) => `${label} ${n(d.targets?.[`${k}_g`])} g`).join(", ")}`}
@@ -183,8 +183,11 @@ export function EnergyDashboard({ data, canEdit }: { data: EnergyHistory; canEdi
         {day.targets?.kcal != null && <div className="energy-total"><span>Препоръчителен прием</span>
           <strong>{n(day.targets.kcal)} <small>kcal</small></strong></div>}
         {day.nutrition_basis && <>
-          {day.nutrition_basis.forecast && <p>Прогнозен разход: {n(day.nutrition_basis.forecast.kcal)} kcal · извън тренировките: {n(day.nutrition_basis.forecast.outside_kcal)} kcal · планирани тренировки: {n(day.nutrition_basis.forecast.activity_kcal)} kcal.</p>}
-          <p>Среден разход: {n(day.nutrition_basis.mean_expenditure_kcal)} kcal · корекция: {(day.nutrition_basis.correction_kcal ?? 0) > 0 ? "+" : ""}{n(day.nutrition_basis.correction_kcal)} kcal.</p>
+          <p>Основа — среден разход за 7 дни: {n(day.nutrition_basis.mean_expenditure_kcal)} kcal · корекция: {(day.nutrition_basis.correction_kcal ?? 0) > 0 ? "+" : ""}{n(day.nutrition_basis.correction_kcal)} kcal.</p>
+          {day.nutrition_basis.forecast && <details><summary>Отделна прогноза по плана</summary>
+            <p>Прогнозен разход: {n(day.nutrition_basis.forecast.kcal)} kcal · извън тренировките: {n(day.nutrition_basis.forecast.outside_kcal)} kcal · планирани тренировки: {n(day.nutrition_basis.forecast.activity_kcal)} kcal.</p>
+            <p className="energy-caption">Тази прогноза е за сравнение и не променя автоматично хранителната цел.</p>
+          </details>}
           <p className="energy-caption">История: {day.nutrition_basis.window_start} – {day.nutrition_basis.window_end} · {day.nutrition_basis.available_days}/7 дни.
             {day.nutrition_basis.deviation_percent != null && <> Последният ден: {day.nutrition_basis.deviation_percent > 0 ? "+" : ""}{n(day.nutrition_basis.deviation_percent, 1)}% спрямо средното; използвани са 25% от отклонението.</>}</p>
           {day.nutrition_basis.notes.map(note => <p key={note} className="energy-caption">{note}</p>)}

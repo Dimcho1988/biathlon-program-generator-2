@@ -89,12 +89,12 @@ describe("energy review", () => {
   });
   it("opens the seven-day target view and excludes private plan summaries", () => {
     const basis: NonNullable<EnergyDay["nutrition_basis"]> = {
-      version: "nutrition-seven-day-plan-forecast-v3", status: "AVAILABLE", target_day: "2026-11-20",
+      version: "nutrition-seven-day-history-anchor-v4", status: "AVAILABLE", target_day: "2026-11-20",
       provisional: true, window_start: "2026-11-12", window_end: "2026-11-18", available_days: 7,
       missing_days: [], mean_expenditure_kcal: 2700, last_day_expenditure_kcal: 2700,
       deviation_kcal: 0, deviation_percent: 0, correction_factor: .25, correction_kcal: 0,
       nonprotein_carbohydrate_fraction: null, weight_kg: 70, history: [], notes: [],
-      food_preferences: { allergies: "ядки", preferences: "" }, anchor_source: "PLANNED_TRAINING",
+      food_preferences: { allergies: "ядки", preferences: "" }, anchor_source: "HISTORICAL_MEAN", forecast_role: "INFORMATION_ONLY",
       forecast: { source: "PLANNED_TRAINING", plan_revision: 4, kcal: 2800, outside_kcal: 2000,
         activity_kcal: 800, duration_s: 3600, sessions: [{title:"Private session", sport:"Run",zone:"Z2",duration_min:60,kcal:800,methods:["PLANNED_HR"]}] }
     };
@@ -109,6 +109,9 @@ describe("energy review", () => {
     expect(html).toContain("Прогноза за следващите 7 дни");
     expect(html).toContain('max="2026-11-26"');
     expect(html).toContain("Прогнозен разход");
+    expect(html).toContain("Отделна прогноза по плана");
+    expect(html).toContain("Основа — среден разход за 7 дни");
+    expect(html).toContain("не променя автоматично хранителната цел");
     expect(html).not.toContain("Общ дневен разход");
     expect(html).toMatch(/value="kcal" selected=""/);
   });
