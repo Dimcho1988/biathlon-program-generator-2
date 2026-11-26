@@ -151,3 +151,29 @@ def test_old_valid_lock_keeps_its_dose_and_counts_once(monkeypatch):
     counts = planning_development.count(plan["days"], start=TODAY, end=TODAY+timedelta(days=6))
     assert plan["allocation"]["development"]["segments"][0]["planned"] == counts["planned"]
     assert_daily_limits(plan)
+
+
+def test_reserve_real_building_doses_then_fill_remaining_slots(monkeypatch):
+    from apps.api import planning_search
+    fixed_readiness(monkeypatch, 100.)
+    profile = aerobic_profile(300., 2)
+    original_goals = engine._goals
+    def goals(*args, **kwargs):
+        values, accents, cycle = original_goals(*args, **kwargs)
+        values["Z1"]["target_weekly_q"] = 300.
+        return values, accents, cycle
+    monkeypatch.setattr(engine, "_goals", goals)
+    gaps = {TODAY.isoformat(): {"Z1": .2}}
+    policy = {"component_gap_first": True, "cycle_shortfalls": gaps}
+    core = run(monkeypatch, {**profile, "_allocation_policy": {**policy, "building_pass": "CORE"}})
+    reservations = planning_search.building_reservations(core, gaps)
+    assert sum(map(len, reservations.values())) == 2
+    assert all(planning_development.is_developmental(s) for d in core["days"] for s in d["sessions"])
+    filled = run(monkeypatch, {**profile, "_allocation_policy": {
+        **policy, "building_pass": "FILL", "reservation_methods": reservations}})
+    sessions = [(day["date"], s) for day in filled["days"] for s in day["sessions"]]
+    assert {(d, s["slot"]) for d, s in sessions if planning_development.is_developmental(s)} == {
+        (d, r["slot"]) for d, records in reservations.items() for r in records}
+    assert any(s["purpose"] == "MAINTENANCE" for _, s in sessions)
+    assert 90 <= filled["allocation"]["segments"][0]["components"]["Z1"]["coverage_percent"] <= 110
+    assert_daily_limits(filled)

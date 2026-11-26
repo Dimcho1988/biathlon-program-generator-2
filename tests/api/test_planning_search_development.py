@@ -86,3 +86,42 @@ def test_manual_target_conflict_is_not_reported_as_completed_even_at_100_percent
     result = planning_search.improve(baseline, {}, lambda _: pytest.fail("No useful redistribution"))
     assert result["allocation"]["search"]["configuration_conflict"] is True
     assert result["allocation"]["search"]["conclusion"] == "CONFIGURATION_CONFLICT"
+
+
+def zone_plan(z2, z4, z5, kind="BUILD"):
+    allocation = {"components": {}, "segments": [], "development": {"segments": []}}
+    first, end = "2026-11-27", "2026-12-03"
+    rows = {z: {"target": 100., "basis": "DIRECT_Q", "actual": 0., "planned": value}
+            for z, value in (("Z2", z2), ("Z4", z4), ("Z5", z5))}
+    allocation["components"] = rows
+    allocation["segments"].append({"window_start": first, "window_end": end, "components": rows})
+    allocation["development"]["segments"].append({"window_start": first, "kind": kind,
+        "assessed": kind == "BUILD", "target_shortfall": 0})
+    return {"days": [], "allocation": allocation}
+
+
+@pytest.mark.parametrize("z2,expected_z4", [(89., 0.), (90., 95.), (110., 95.), (111., 0.)])
+def test_building_first_fills_z4_without_losing_an_accepted_zone(z2, expected_z4):
+    baseline = zone_plan(100., 0., 100.)
+    def replay(policy):
+        if policy.get("building_pass") == "CORE":
+            return zone_plan(100., 100., 100.)  # A provisional plan can never win.
+        if policy.get("building_pass") == "FILL":
+            return zone_plan(z2, 95., 100.)
+        return deepcopy(baseline)
+    result = planning_search.improve(baseline, {}, replay)
+    assert result["allocation"]["components"]["Z4"]["planned"] == expected_z4
+
+
+def test_recovery_gap_only_uses_maintenance_pass_and_ignores_unknown_or_inactive_targets():
+    baseline = zone_plan(100., 0., 100., kind="RECOVERY")
+    rows = baseline["allocation"]["components"]
+    rows["Z2"].update(planned=0, objective_active=False)
+    rows["Z5"]["actual"] = None
+    def replay(policy):
+        assert policy.get("building_pass") != "CORE"
+        if policy.get("building_pass") == "FILL":
+            assert policy["cycle_shortfalls"] == {"2026-11-27": {"Z4": .9}}
+            assert policy["reservation_methods"] == {}
+        return deepcopy(baseline)
+    planning_search.improve(baseline, {}, replay)

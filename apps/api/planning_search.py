@@ -8,7 +8,7 @@ from datetime import date
 import json
 from time import monotonic
 
-from biathlon import planning_allocation
+from biathlon import planning_allocation, planning_development
 
 MAX_UNIQUE_REPLAYS = 12  # The former maximum across every replay stage.
 
@@ -57,6 +57,56 @@ def score(plan, accents):
     return (worst_gap, total_gap, -minimum_shortfall, -target_shortfall, distance,
             training_days, round(sum(accent_credit), 5),
             -round(preparation_cost, 5), -len(sessions))
+
+
+def cycle_shortfalls(plan):
+    """Repair only known active targets in cycles with a resolved training role."""
+    allocation = plan.get("allocation") or {}
+    roles = {r["window_start"]: r for r in (allocation.get("development") or {}).get("segments", [])}
+    result = {}
+    for segment in allocation.get("segments", []):
+        first = segment["window_start"]
+        role = roles.get(first, {})
+        if not (role.get("assessed") or role.get("kind") in {"MAINTAIN", "RECOVERY"}):
+            continue
+        gaps = {}
+        for zone, row in segment["components"].items():
+            if row.get("basis") != "DIRECT_Q" or row["target"] <= 0:
+                continue
+            if planning_allocation.assess_component(row)["coverage_status"] == "BELOW_RANGE":
+                total = row["actual"] + row["planned"] - row.get("support_reserve_q", 0.)
+                gaps[zone] = (.9 * row["target"] - total) / row["target"]
+        if gaps:
+            result[first] = gaps
+    return result
+
+
+def building_reservations(plan, cycles):
+    """Only reserve real developmental doses in the affected cycles."""
+    windows = [(s["window_start"], s["window_end"]) for s in plan["allocation"]["segments"]
+               if s["window_start"] in cycles]
+    reserved = {}
+    for day in [*plan["days"], *plan.get("lookahead_days", [])]:
+        if day.get("locked") or not any(start <= day["date"] <= end for start, end in windows):
+            continue
+        sessions = []
+        for session in day.get("sessions", []):
+            if not planning_development.is_developmental(session):
+                continue
+            reservation = {k: session[k] for k in ("method_id", "sport", "zone", "slot", "purpose", "is_key_session")}
+            support = (session["dose_evidence"].get("continuity") or {}).get("support_q", {})
+            reservation["objective_q"] = {z: max(0., v - support.get(z, 0.))
+                                          for z, v in session["direct_equivalent_minutes"].items() if v > 0}
+            sessions.append(reservation)
+        if sessions:
+            reserved[day["date"]] = sessions
+    return reserved
+
+
+def covered_components(plan):
+    return {(s["window_start"], s["window_end"], z)
+            for s in plan["allocation"].get("segments", []) for z, row in s["components"].items()
+            if planning_allocation.assess_component(row)["coverage_status"] == "WITHIN_RANGE"}
 
 
 def preparation_repair_policy(plan):
@@ -155,6 +205,23 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
         # Search metadata is added only after all candidate comparisons, so
         # the cached result remains unchanged throughout this search.
         return evaluated[key]
+    def better(candidate, incumbent):
+        if score(candidate, accents) <= score(incumbent, accents):
+            return False
+        old = (incumbent["allocation"].get("development") or {}).get("segments", [])
+        new = {r["window_start"]: r for r in (candidate["allocation"].get("development") or {}).get("segments", [])}
+        return (covered_components(incumbent) <= covered_components(candidate)
+                and all(r["window_start"] in new and new[r["window_start"]]["target_shortfall"] <= r["target_shortfall"]
+                        for r in old if r.get("assessed")))
+
+    def fill_policy(core, gaps):
+        return {"component_gap_first": True, "cycle_shortfalls": gaps, "building_pass": "FILL",
+                "reservation_methods": building_reservations(core, gaps)}
+
+    # The baseline already contains legal developmental placements. Refill
+    # those first, even when a busy worker can afford only one full replay.
+    early_gaps = cycle_shortfalls(baseline)
+    early_fill = evaluate(fill_policy(baseline, early_gaps)) if early_gaps else None
     if unmet or empty_requested_day(baseline):
         easy = {d["date"]: sum(s["main_work_minutes"] for s in d.get("sessions", []) if s["zone"] in {"Z1", "Z2"})
                 for d in baseline["days"] if not d.get("locked")}
@@ -231,6 +298,29 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
                     "easy_cap_zones":["Z1"], "spread_recovery":True})
                 if candidate is not None and score(candidate, accents) > score(best, accents):
                     best = candidate
+    # Use the best complete schedule as the reference. In particular, a
+    # component covered by a previous placement must not silently regress.
+    reference = best
+    if early_fill is not None and better(early_fill, reference):
+        best = early_fill
+    gaps = cycle_shortfalls(best)
+    if gaps:
+        policy = {"component_gap_first": True, "cycle_shortfalls": gaps}
+        def refill(core):
+            candidate = evaluate(fill_policy(core, gaps))
+            return candidate if candidate is not None and better(candidate, best) else best
+
+        loading = any(r["window_start"] in gaps and r.get("assessed")
+                      for r in reference["allocation"]["development"]["segments"])
+        if loading and trials + 2 <= MAX_UNIQUE_REPLAYS and monotonic() + 2.2 * estimated_trial_seconds < deadline:
+            # Never publish the sparse provisional pass. The fill pass
+            # re-evaluates every dose and recovery state in chronological order.
+            core = evaluate({**policy, "building_pass": "CORE"})
+            if core is not None:
+                best = refill(core)
+        if cycle_shortfalls(best):
+            # One replay suffices when using already verified building dates.
+            best = refill(reference)
     minimum_shortfall, target_shortfall = development_shortfalls(best)
     configuration_conflict = any(row.get("activity_status") == "CONFLICT"
         for _, row in planning_allocation.objective_rows(best["allocation"]))
@@ -243,7 +333,7 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
             else "TARGETS_COVERED")
     else:
         conclusion = "SEARCH_BUDGET_EXHAUSTED" if budget_exhausted else "CHECKED_VARIANTS_EXHAUSTED"
-    best["allocation"]["search"] = {"version": "bounded-causal-replay-v11-cached-diagnostic-repairs", "alternatives": trials,
+    best["allocation"]["search"] = {"version": "bounded-causal-replay-v12-building-first", "alternatives": trials,
         "reservation_replays":refits,
         "improved": best is not baseline, "priority": ["WORST_COMPONENT_RANGE_GAP", "SUM_COMPONENT_RANGE_GAPS",
             "DEVELOPMENT_MINIMUM_SHORTFALL", "DEVELOPMENT_TARGET_SHORTFALL", "DISTANCE_TO_100_PERCENT",
