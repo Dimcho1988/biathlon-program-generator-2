@@ -142,11 +142,11 @@ def maintenance_replacements(plan, gaps, profile):
                         continue
                     slack = max(0., row["actual"] + row["planned"] - row.get("support_reserve_q", 0.) - (1 - planning_allocation.COVERAGE_TOLERANCE) * row["target"])
                     loss += max(0., direct[z] - support.get(z, 0.) - slack) / row["target"]
-                options.append((loss, bool(current), -float(direct.get(zone, 0.)), key, slot))
+                options.append((loss, bool(current), -direct.get(zone, 0.), -schedule_date.toordinal(), key, slot))
         if options:
-            _, _, _, key, slot = min(options)
+            _, _, _, _, key, slot = min(options)
             pins[key] = [r for r in pins.get(key, []) if r["slot"] != slot]
-            changes[key] = {"slot": slot, "zone": zone}
+            changes[first] = {"date": key, "slot": slot, "zone": zone}
     return pins, changes
 
 
@@ -262,12 +262,16 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
                         for r in old if r.get("assessed")))
 
     def fill_policy(core, gaps, *, local=False):
-        policy = {"component_gap_first": True, "cycle_shortfalls": gaps, "building_pass": "FILL",
+        original = (core.get("parameters") or {}).get("allocation_policy") or {}
+        policy = {**original, "cycle_shortfalls": gaps, "building_pass": "FILL",
                   "reservation_methods": building_reservations(core, gaps)}
+        if not local:
+            policy["component_gap_first"] = True
         if local:
             pins, changes = maintenance_replacements(core, gaps, profile)
             if changes:
-                policy.update(maintenance_replacements=changes, placement_methods=pins)
+                policy.update(maintenance_replacements=changes, placement_methods=pins,
+                              reference_reservations=original.get("reservation_methods", {}))
         return policy
 
     # The baseline already contains legal developmental placements. Refill

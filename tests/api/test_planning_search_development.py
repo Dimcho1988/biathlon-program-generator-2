@@ -137,5 +137,5 @@ def test_local_repair_keeps_building_slots_and_uses_an_open_training_day():
                     {"date": "2026-11-29", "status": "EXISTING_ACTIVITY"}]
     plan["lookahead_days"] = [{"date": "2026-11-30", "status": "REST", "sessions": []}]
     pins, changes = planning_search.maintenance_replacements(plan, planning_search.cycle_shortfalls(plan), {})
-    assert changes == {"2026-11-30": {"slot": 1, "zone": "Z4"}}
+    assert changes == {"2026-11-27": {"date": "2026-11-30", "slot": 1, "zone": "Z4"}}
     assert pins["2026-11-27"][0]["method_id"] == "Z5-METHOD"

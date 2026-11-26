@@ -3045,11 +3045,17 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             and (profile.get("_allocation_policy") or {}).get("development_first", True))
         cycle_gaps = schedule_policy.get("cycle_shortfalls", {}).get(active_segment["window_start"], {}) if active_segment else {}
         building_pass = schedule_policy.get("building_pass") if cycle_gaps else None
+        replacement = schedule_policy.get("maintenance_replacements", {}).get(active_segment["window_start"]) if active_segment else None
+        at_replacement = bool(replacement and (key, slot_index + 1) == (replacement["date"], replacement["slot"]))
+        before_replacement = bool(replacement and (key, slot_index + 1) < (replacement["date"], replacement["slot"]))
+        if before_replacement:
+            building_pass, cycle_gaps = None, {}
+        reservation_methods = (schedule_policy.get("reference_reservations", {}) if before_replacement
+                               else schedule_policy.get("reservation_methods", {}))
         reserved_slot = any(r.get("slot") == slot_index + 1 for r in reservation_methods.get(key, []))
         coach_request = training_structure.requested_session(structure_requests, day, slot_index)
         fill_slot = building_pass == "FILL" and not reserved_slot and not coach_request
-        replacement = schedule_policy.get("maintenance_replacements", {}).get(key, {})
-        replace_zone = replacement.get("zone") if fill_slot and replacement.get("slot") == slot_index + 1 else None
+        replace_zone = replacement["zone"] if at_replacement and fill_slot else None
         placements = schedule_policy.get("placement_methods", {}) if building_pass == "FILL" else {}
         future_core_q = {}
         if fill_slot:
@@ -3937,7 +3943,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 # Balance only the complete doses needed, not all free slots.
                 # This avoids taking a maximum now and stranding a tiny remainder.
                 stranded_fraction = 0.
-                if allocation and (allocation_policy.get("balance_complete_doses", True)
+                if allocation and z != replace_zone and (allocation_policy.get("balance_complete_doses", True)
                     or z == "Z1" and purpose == "RECOVERY" and allocation_policy.get("spread_recovery")) and not method.get("double_threshold") and not method.get("combined_methods") and not mixed:
                     minimum_blocks = _blocks(method, method["min_work_min"], evidence, settings)
                     minimum_q, minimum_e, _ = candidate_load(minimum_blocks, capacity=evidence)
