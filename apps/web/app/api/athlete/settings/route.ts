@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     const indicator = String(form.get("leading_indicator") ?? "HEART_RATE");
     const resolvedMaximum = hrmax ?? (age !== null ? Math.floor(208 - .7 * age + .5) : null);
     if (
-      !["LAST_40_DAYS", "LAST_90_DAYS", "FROM_DATE"].includes(applyMode)
+      !["LAST_40_DAYS", "FROM_TODAY", "FROM_DATE", "LAST_90_DAYS"].includes(applyMode)
       || (applyMode === "FROM_DATE" && !/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom))
       || !["MANUAL", "AUTOMATIC_HRMAX"].includes(source)
       || (source === "MANUAL" && (

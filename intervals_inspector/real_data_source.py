@@ -84,7 +84,7 @@ _STRENGTH_ACTIVITY_TYPES = frozenset(
 )
 DEFAULT_HISTORY_DAYS = 90
 MIN_HISTORY_DAYS = 41
-MAX_HISTORY_DAYS = 219
+MAX_HISTORY_DAYS = 366 + 1 + 40  # Calendar-year correction including both endpoints and 40 preceding days.
 _SAFE_ACTIVITY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
 

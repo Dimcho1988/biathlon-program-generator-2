@@ -83,7 +83,7 @@ class SessionExchangeResponse(StrictModel):
 
 
 class AthleteSettingsInput(StrictModel):
-    hrmax_apply_mode: Literal["LAST_40_DAYS", "LAST_90_DAYS", "FROM_DATE"] = "LAST_40_DAYS"
+    hrmax_apply_mode: Literal["LAST_40_DAYS", "FROM_TODAY", "FROM_DATE", "LAST_90_DAYS"] = "LAST_40_DAYS"
     hrmax_effective_from: date | None = None
     hr_zone_bounds_bpm: tuple[int, int, int, int, int, int] | None = None
     timezone: str

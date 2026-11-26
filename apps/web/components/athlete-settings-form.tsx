@@ -26,6 +26,20 @@ type AthleteSettingsFormProps = {
   initialHrmaxSource?: "MANUAL" | "TANAKA" | "OBSERVED" | null;
 };
 
+function calibrationDateBounds(timezone: string) {
+  try {
+    const today = new Intl.DateTimeFormat("sv-SE", {
+      timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
+    }).format(new Date());
+    const priorYear = Number(today.slice(0, 4)) - 1;
+    const monthDay = today.endsWith("02-29") ? "02-28" : today.slice(5);
+    return { min: `${priorYear}-${monthDay}`, max: today };
+  } catch {
+    // The timezone is editable. The API validates the completed field on save.
+    return {};
+  }
+}
+
 export function AthleteSettingsForm({
   notice,
   initialBounds = null,
@@ -46,7 +60,9 @@ export function AthleteSettingsForm({
     initialSource ?? (!initialBounds && autoAvailable ? "AUTOMATIC_HRMAX" : "MANUAL")
   );
   const [hrmax, setHrmax] = useState(initialHrmaxSource === "TANAKA" ? "" : initialHrmax?.toString() ?? "");
+  const [timezone, setTimezone] = useState(initialTimezone ?? "Europe/Sofia");
   const [applyMode, setApplyMode] = useState("LAST_40_DAYS");
+  const dateBounds = applyMode === "FROM_DATE" ? calibrationDateBounds(timezone) : {};
   const [age, setAge] = useState(initialAge?.toString() ?? "");
   const predictedMaximum = age !== "" ? Math.floor(208 - 0.7 * Number(age) + 0.5) : null;
   const maximum = hrmax !== "" ? Number(hrmax) : predictedMaximum;
@@ -78,12 +94,13 @@ export function AthleteSettingsForm({
             <span>Период за преизчисляване</span>
             <select name="hrmax_apply_mode" value={applyMode} onChange={event => setApplyMode(event.target.value)}>
               <option value="LAST_40_DAYS">За последните 40 дни</option>
-              <option value="FROM_DATE">От избрана дата</option>
+              <option value="FROM_TODAY">От днес (датата на промяната)</option>
+              <option value="FROM_DATE">От избрана дата до 12 месеца назад</option>
             </select>
           </label>
           {applyMode === "FROM_DATE" && <label className="timezone-field">
-            <span>Начална дата (в последните 180 дни)</span>
-            <input name="hrmax_effective_from" type="date" required />
+            <span>Начална дата (в последните 12 месеца)</span>
+            <input name="hrmax_effective_from" type="date" {...dateBounds} defaultValue={dateBounds.min} required />
           </label>}
           <small>При промяна на максималния пулс или зоните зависимите оценки се преизчисляват във фонов режим. Преди началната дата се запазват предишните стойности. Измерените данни остават непроменени.</small>
         </fieldset>}
@@ -127,7 +144,7 @@ export function AthleteSettingsForm({
         {!autoAvailable && <p className="state-help">Автоматичните зони ще бъдат достъпни след задаване на експертната схема. Засега въведете индивидуалните си граници.</p>}
         <label className="timezone-field">
           <span>Часова зона</span>
-          <input name="timezone" type="text" defaultValue={initialTimezone ?? "Europe/Sofia"} maxLength={64} required autoComplete="off" />
+          <input name="timezone" type="text" value={timezone} onChange={event => setTimezone(event.target.value)} maxLength={64} required autoComplete="off" />
         </label>
         <button className="action-button" type="submit">Запази настройките</button>
       </form>

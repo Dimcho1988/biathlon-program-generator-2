@@ -416,7 +416,7 @@ describe("integration route redirects behind a reverse proxy", () => {
     });
   });
 
-  it("passes an explicit HR calibration date to the authenticated API", async () => {
+  it.each(["FROM_TODAY", "FROM_DATE"])("passes the selected HR calibration mode %s to the authenticated API", async (mode) => {
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
     process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
     process.env.ONFLOWS_PROFILE_MODE = "multi";
@@ -428,12 +428,12 @@ describe("integration route redirects behind a reverse proxy", () => {
     form.set("hr_zone_source", "AUTOMATIC_HRMAX");
     form.set("hrmax_bpm", "200");
     form.set("timezone", "Europe/Sofia");
-    form.set("hrmax_apply_mode", "FROM_DATE");
+    form.set("hrmax_apply_mode", mode);
     form.set("hrmax_effective_from", "2026-11-01");
     const response = await saveSettings(new Request("https://web.example.test/api/athlete/settings", { method: "POST", body: form }));
     expect(response.headers.get("location")).toBe("/?settings=saved");
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({
-      hrmax_apply_mode: "FROM_DATE", hrmax_effective_from: "2026-11-01",
+      hrmax_apply_mode: mode, hrmax_effective_from: mode === "FROM_DATE" ? "2026-11-01" : null,
     });
   });
 
