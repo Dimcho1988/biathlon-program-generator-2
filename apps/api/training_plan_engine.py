@@ -3048,6 +3048,9 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         reserved_slot = any(r.get("slot") == slot_index + 1 for r in reservation_methods.get(key, []))
         coach_request = training_structure.requested_session(structure_requests, day, slot_index)
         fill_slot = building_pass == "FILL" and not reserved_slot and not coach_request
+        replacement = schedule_policy.get("maintenance_replacements", {}).get(key, {})
+        replace_zone = replacement.get("zone") if fill_slot and replacement.get("slot") == slot_index + 1 else None
+        placements = schedule_policy.get("placement_methods", {}) if building_pass == "FILL" else {}
         future_core_q = {}
         if fill_slot:
             for date_key, reserved in reservation_methods.items():
@@ -4638,7 +4641,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     if segment_keys[r["date"]] == segment_keys[day]) if z == "Z1"
                     and period_objectives and period_objectives[z]["basis"] == "DIRECT_Q" else 0. for z in COMPONENTS}
                 def choice_priority(c):
-                    preferred = [r for r in reservation_methods.get(day.isoformat(), []) if r.get("slot") == slot_index+1]
+                    preferred = [r for r in placements.get(key, reservation_methods.get(key, [])) if r.get("slot") == slot_index+1]
                     allowance = choice_headroom[(c[2]["sport"], c[2]["method_id"])] or {}
                     extra_taper = (taper_continuity_allowed and allowance.get("mode") and
                         planning_continuity.evidence(c[2]["direct_equivalent_minutes"],
@@ -4685,6 +4688,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         # here already passed time, Q/E, Recovery and the
                         # shared daily intensity ledger; labels alone do not count.
                         development_due and not planning_development.is_developmental(c[2]),
+                        bool(replace_zone and c[2]["direct_equivalent_minutes"].get(replace_zone, 0.) <= .005),
                         -gap_credit, unrepresented,
                         *gap_priority,
                         not c[2]["is_key_session"] if day in key_slots and slot_index == first_plannable_slot(day) else False,

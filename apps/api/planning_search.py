@@ -8,7 +8,7 @@ from datetime import date
 import json
 from time import monotonic
 
-from biathlon import planning_allocation, planning_development
+from biathlon import planning_allocation, planning_development, planning_history, training_structure
 
 MAX_UNIQUE_REPLAYS = 12  # The former maximum across every replay stage.
 
@@ -73,9 +73,10 @@ def cycle_shortfalls(plan):
         for zone, row in segment["components"].items():
             if row.get("basis") != "DIRECT_Q" or row["target"] <= 0:
                 continue
-            if planning_allocation.assess_component(row)["coverage_status"] == "BELOW_RANGE":
+            assessment = planning_allocation.assess_component(row)
+            if assessment["coverage_status"] == "BELOW_RANGE":
                 total = row["actual"] + row["planned"] - row.get("support_reserve_q", 0.)
-                gaps[zone] = (.9 * row["target"] - total) / row["target"]
+                gaps[zone] = (assessment["lower_acceptable"] - total) / row["target"]
         if gaps:
             result[first] = gaps
     return result
@@ -101,6 +102,52 @@ def building_reservations(plan, cycles):
         if sessions:
             reserved[day["date"]] = sessions
     return reserved
+
+
+def maintenance_replacements(plan, gaps, profile):
+    """Keep proven placements and propose one low-cost change per missed cycle."""
+    pins = reservation_methods(plan)
+    changes = {}
+    slots = (profile.get("planning_controls") or {}).get("sessions_by_day") or [1] * 7
+    requests = training_structure.requests(profile)
+    available = planning_history.availability(profile) if profile.get("available_minutes") else [1] * 7
+    for segment in plan["allocation"].get("segments", []):
+        first, last = segment["window_start"], segment["window_end"]
+        if first not in gaps:
+            continue
+        rows = segment["components"]
+        zone = max(gaps[first], key=gaps[first].get)
+        options = []
+        for day in [*plan["days"], *plan.get("lookahead_days", [])]:
+            key = day["date"]
+            if not first <= key <= last or day.get("locked") or day.get("status") not in {"TRAINING", "REST"}:
+                continue
+            schedule_date = date.fromisoformat(key)
+            if day.get("activity_refs") or available[schedule_date.weekday()] <= 0:
+                continue
+            sessions = {s["slot"]: s for s in day.get("sessions", [])}
+            for slot in range(1, slots[schedule_date.weekday()] + 1):
+                if training_structure.requested_session(requests, schedule_date, slot - 1):
+                    continue
+                current = sessions.get(slot, {})
+                if current.get("double_threshold_pair_id") or planning_development.is_developmental(current):
+                    continue
+                direct = current.get("direct_equivalent_minutes", {})
+                support = (current.get("dose_evidence", {}).get("continuity") or {}).get("support_q", {})
+                loss = 0.
+                for z, row in rows.items():
+                    if z == zone or z not in direct or not row["target"] or row.get("basis") != "DIRECT_Q":
+                        continue
+                    if row.get("objective_active") is False or row.get("actual") is None or row.get("planned") is None:
+                        continue
+                    slack = max(0., row["actual"] + row["planned"] - row.get("support_reserve_q", 0.) - (1 - planning_allocation.COVERAGE_TOLERANCE) * row["target"])
+                    loss += max(0., direct[z] - support.get(z, 0.) - slack) / row["target"]
+                options.append((loss, bool(current), -float(direct.get(zone, 0.)), key, slot))
+        if options:
+            _, _, _, key, slot = min(options)
+            pins[key] = [r for r in pins.get(key, []) if r["slot"] != slot]
+            changes[key] = {"slot": slot, "zone": zone}
+    return pins, changes
 
 
 def covered_components(plan):
@@ -214,14 +261,19 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
                 and all(r["window_start"] in new and new[r["window_start"]]["target_shortfall"] <= r["target_shortfall"]
                         for r in old if r.get("assessed")))
 
-    def fill_policy(core, gaps):
-        return {"component_gap_first": True, "cycle_shortfalls": gaps, "building_pass": "FILL",
-                "reservation_methods": building_reservations(core, gaps)}
+    def fill_policy(core, gaps, *, local=False):
+        policy = {"component_gap_first": True, "cycle_shortfalls": gaps, "building_pass": "FILL",
+                  "reservation_methods": building_reservations(core, gaps)}
+        if local:
+            pins, changes = maintenance_replacements(core, gaps, profile)
+            if changes:
+                policy.update(maintenance_replacements=changes, placement_methods=pins)
+        return policy
 
     # The baseline already contains legal developmental placements. Refill
     # those first, even when a busy worker can afford only one full replay.
     early_gaps = cycle_shortfalls(baseline)
-    early_fill = evaluate(fill_policy(baseline, early_gaps)) if early_gaps else None
+    early_fill = evaluate(fill_policy(baseline, early_gaps, local=True)) if early_gaps else None
     if unmet or empty_requested_day(baseline):
         easy = {d["date"]: sum(s["main_work_minutes"] for s in d.get("sessions", []) if s["zone"] in {"Z1", "Z2"})
                 for d in baseline["days"] if not d.get("locked")}
@@ -306,8 +358,8 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
     gaps = cycle_shortfalls(best)
     if gaps:
         policy = {"component_gap_first": True, "cycle_shortfalls": gaps}
-        def refill(core):
-            candidate = evaluate(fill_policy(core, gaps))
+        def refill(core, *, local=False):
+            candidate = evaluate(fill_policy(core, gaps, local=local))
             return candidate if candidate is not None and better(candidate, best) else best
 
         loading = any(r["window_start"] in gaps and r.get("assessed")
@@ -320,7 +372,7 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
                 best = refill(core)
         if cycle_shortfalls(best):
             # One replay suffices when using already verified building dates.
-            best = refill(reference)
+            best = refill(reference, local=True)
     minimum_shortfall, target_shortfall = development_shortfalls(best)
     configuration_conflict = any(row.get("activity_status") == "CONFLICT"
         for _, row in planning_allocation.objective_rows(best["allocation"]))

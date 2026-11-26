@@ -125,3 +125,17 @@ def test_recovery_gap_only_uses_maintenance_pass_and_ignores_unknown_or_inactive
             assert policy["reservation_methods"] == {}
         return deepcopy(baseline)
     planning_search.improve(baseline, {}, replay)
+
+
+def test_local_repair_keeps_building_slots_and_uses_an_open_training_day():
+    plan = zone_plan(100., 0., 100.)
+    reference = {"method_id": "Z5-METHOD", "slot": 1, "zone": "Z5", "sport": "Run", "purpose": "BUILDING",
+                 "blocks": [{"kind": "WORK", "zone": "Z5", "duration_min": 10.}],
+                 "dose_evidence": {"standard_method_work_minutes": 10.}, "direct_equivalent_minutes": {"Z5": 10.}}
+    plan["days"] = [{"date": "2026-11-27", "status": "TRAINING", "sessions": [reference]},
+                    {"date": "2026-11-28", "status": "REST", "locked": True},
+                    {"date": "2026-11-29", "status": "EXISTING_ACTIVITY"}]
+    plan["lookahead_days"] = [{"date": "2026-11-30", "status": "REST", "sessions": []}]
+    pins, changes = planning_search.maintenance_replacements(plan, planning_search.cycle_shortfalls(plan), {})
+    assert changes == {"2026-11-30": {"slot": 1, "zone": "Z4"}}
+    assert pins["2026-11-27"][0]["method_id"] == "Z5-METHOD"
