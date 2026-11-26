@@ -33,7 +33,10 @@ def enqueue(repository, alias, body, actor):
         request['kind'] = 'DAY'
     result = repository.planning_job('ENQUEUE', alias=alias, actor=str(actor), request=request)
     if isinstance(result, dict) and result.get('conflict'):
-        raise HTTPException(409, 'Planning inputs changed or another draft is already being prepared')
+        if result.get('reason') == 'JOB_IN_PROGRESS':
+            raise HTTPException(409, 'Another planning request is already pending',
+                                headers={'X-OnFlows-Planning-Conflict': 'JOB_IN_PROGRESS'})
+        raise HTTPException(409, 'Planning inputs changed; reload before editing')
     return {'job': public_job(result)}
 
 

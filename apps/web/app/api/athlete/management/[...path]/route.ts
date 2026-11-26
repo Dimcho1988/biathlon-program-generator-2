@@ -134,6 +134,9 @@ async function proxy(request: Request, context: Context) {
       const message = isRecord(detail) ? typeof detail.detail === "string" ? detail.detail : isRecord(detail.detail) && typeof detail.detail.message === "string" ? detail.detail.message : detail.error : null;
       return error(typeof message === "string" && message.length <= 1500 ? message : "Предложението не отговаря на правилата на основния метод или няма запазена програма за избрания период.", 422);
     }
+    if (response.status === 409 && response.headers.get("X-OnFlows-Planning-Conflict") === "JOB_IN_PROGRESS")
+      return NextResponse.json({error:"Вече се обработва друга заявка за този спортист. Прегледай програмата след приключването ѝ.",
+        code:"JOB_IN_PROGRESS"}, {status:409, headers:{"Cache-Control":"no-store"}});
     if (!response.ok) return error(response.status === 409
       ? "Профилът, програмата или входните данни са променени. Презаредете и прегледайте последната версия."
       : response.status === 422 ? endpoint === "methods/preferences" ? "Провери диапазоните. Методът трябва да поддържа избраната корекция; комбинираните отсечки имат собствена структура. Настройките не бяха записани." : "Проверете профила, периода и календара. Програмата не беше записана."

@@ -477,10 +477,16 @@ it.each([
 
 it("keeps day decisions on the full plan revision without check opt-in", async () => {
   const initial = { ...activeResponse(6), capabilities: { unchanged_checks: true } };
-  const fetchMock = vi.fn<typeof fetch>(async () => Response.json(initial)); vi.stubGlobal("fetch", fetchMock);
-  await mount(<ActiveTrainingPlan value={initial} onChange={vi.fn()} canEdit today="2026-09-21" renderDay={() => null}/>);
+  const job = {job_id:"11111111-1111-4111-8111-111111111111",kind:"DAY",status:"QUEUED",stage:"QUEUED",
+    start_date:"2026-09-22",result_revision:null,error_code:null};
+  const fetchMock = vi.fn<typeof fetch>(async () => Response.json({job,active:null,history:[],background_update:{status:"QUEUED"}},{status:202}));
+  vi.stubGlobal("fetch", fetchMock);
+  const accepted=vi.fn(), changed=vi.fn();
+  await mount(<ActiveTrainingPlan value={initial} onChange={changed} onDayJob={accepted} canEdit today="2026-09-21" renderDay={() => null}/>);
   const rest = [...container.querySelectorAll("button")].find(node => node.textContent?.startsWith("Почивка на "))!;
   await click(rest);
+  expect(accepted).toHaveBeenCalledWith(job);
+  expect(changed).not.toHaveBeenCalled();
   expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toEqual({ date: "2026-09-22", action: "REST", note: "", expected_revision: 6 });
 });
 
