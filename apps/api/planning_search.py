@@ -274,10 +274,6 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
                               reference_reservations=original.get("reservation_methods", {}))
         return policy
 
-    # The baseline already contains legal developmental placements. Refill
-    # those first, even when a busy worker can afford only one full replay.
-    early_gaps = cycle_shortfalls(baseline)
-    early_fill = evaluate(fill_policy(baseline, early_gaps, local=True)) if early_gaps else None
     if unmet or empty_requested_day(baseline):
         easy = {d["date"]: sum(s["main_work_minutes"] for s in d.get("sessions", []) if s["zone"] in {"Z1", "Z2"})
                 for d in baseline["days"] if not d.get("locked")}
@@ -356,27 +352,25 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
                     best = candidate
     # Use the best complete schedule as the reference. In particular, a
     # component covered by a previous placement must not silently regress.
-    reference = best
-    if early_fill is not None and better(early_fill, reference):
-        best = early_fill
     gaps = cycle_shortfalls(best)
     if gaps:
-        policy = {"component_gap_first": True, "cycle_shortfalls": gaps}
         def refill(core, *, local=False):
             candidate = evaluate(fill_policy(core, gaps, local=local))
             return candidate if candidate is not None and better(candidate, best) else best
 
+        # A repair may use only the budget left after selecting the reference.
+        # On a slow worker a single refill can otherwise displace the only
+        # ordinary alternative that covers another component of this cycle.
+        best = refill(best, local=True)
+        gaps = cycle_shortfalls(best)
         loading = any(r["window_start"] in gaps and r.get("assessed")
-                      for r in reference["allocation"]["development"]["segments"])
+                      for r in best["allocation"]["development"]["segments"])
         if loading and trials + 2 <= MAX_UNIQUE_REPLAYS and monotonic() + 2.2 * estimated_trial_seconds < deadline:
             # Never publish the sparse provisional pass. The fill pass
             # re-evaluates every dose and recovery state in chronological order.
-            core = evaluate({**policy, "building_pass": "CORE"})
+            core = evaluate({"component_gap_first": True, "cycle_shortfalls": gaps, "building_pass": "CORE"})
             if core is not None:
                 best = refill(core)
-        if cycle_shortfalls(best):
-            # One replay suffices when using already verified building dates.
-            best = refill(reference, local=True)
     minimum_shortfall, target_shortfall = development_shortfalls(best)
     configuration_conflict = any(row.get("activity_status") == "CONFLICT"
         for _, row in planning_allocation.objective_rows(best["allocation"]))

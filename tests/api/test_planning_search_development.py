@@ -139,3 +139,22 @@ def test_local_repair_keeps_building_slots_and_uses_an_open_training_day():
     pins, changes = planning_search.maintenance_replacements(plan, planning_search.cycle_shortfalls(plan), {})
     assert changes == {"2026-11-27": {"date": "2026-11-30", "slot": 1, "zone": "Z4"}}
     assert pins["2026-11-27"][0]["method_id"] == "Z5-METHOD"
+
+
+@pytest.mark.parametrize("limit", [1, 12])
+def test_fill_cannot_displace_the_reference_that_covers_another_zone(monkeypatch, limit):
+    monkeypatch.setattr(planning_search, "MAX_UNIQUE_REPLAYS", limit)
+    baseline = zone_plan(45., 36., 100.)
+    reference = zone_plan(100., 76., 100.)
+    tradeoff = zone_plan(89., 96., 100.)
+    calls = []
+
+    def replay(policy):
+        calls.append(policy)
+        return deepcopy(tradeoff if policy.get("building_pass") else reference)
+
+    chosen = planning_search.improve(baseline, {}, replay)
+    assert not calls[0].get("building_pass")
+    assert chosen["allocation"]["components"]["Z2"]["planned"] == 100.
+    if limit > 1:
+        assert any(p.get("building_pass") == "FILL" for p in calls)
