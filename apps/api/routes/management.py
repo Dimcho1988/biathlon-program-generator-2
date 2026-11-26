@@ -456,7 +456,7 @@ def management_plan_action(body: ManagementPlanAction,
     return _management_action("action", body, authorization, athlete_alias, actor)
 
 
-@router.post("/api/v2/athlete/management/day")
+@router.post("/api/v2/athlete/management/day", status_code=202)
 def management_day_action(body: ManagementDayAction,
     authorization: Annotated[str | None, Header()] = None,
     athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
