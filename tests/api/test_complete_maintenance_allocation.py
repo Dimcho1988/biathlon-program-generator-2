@@ -113,3 +113,29 @@ def test_building_core_is_preserved_while_maintenance_fills_the_residual(monkeyp
     row = plan["allocation"]["segments"][0]["components"]["Z5"]
     assert row["coverage_percent"] == 100.
     assert row["coverage_status"] == "WITHIN_RANGE"
+
+
+def test_restore_shortened_continuous_part_within_remaining_q_and_future_reservations():
+    from apps.api.training_plan_engine import _refit_continuous_support
+
+    method = {"combined_methods": [{}, {"zone": "Z2", "structure": "CONTINUOUS"}]}
+    primary = {"combination_part": 1, "kind": "WORK", "zone": "Z3", "duration_min": 10., "duration_s": 600.}
+    secondary = {"combination_part": 2, "kind": "WORK", "zone": "Z2", "duration_min": 76., "duration_s": 4560.}
+    blocks = [primary, secondary]
+    session = {"purpose": "MAINTENANCE",
+               "blocks": [primary, {**secondary, "duration_min": 84.5, "duration_s": 5070.}]}
+    objectives = {"Z2": {"basis": "DIRECT_Q", "remaining": 79.237}}
+
+    def load(parts):
+        return {"Z2": parts[1]["duration_min"] * .938}, {}, {}
+
+    def fits(parts):
+        return parts[1]["duration_s"] <= 77.5 * 60
+
+    result = _refit_continuous_support(method, session, blocks, objectives, load, fits)
+    assert result == [primary, {**secondary, "duration_min": 77.5, "duration_s": 4650.}]
+    assert blocks[1]["duration_min"] == 76.
+    objectives["Z2"]["remaining"] = 76.5 * .938
+    assert _refit_continuous_support(method, session, blocks, objectives, load, fits)[1]["duration_min"] == 76.5
+    session["purpose"] = "BUILDING"
+    assert _refit_continuous_support(method, session, blocks, objectives, load, fits) is blocks

@@ -1806,6 +1806,49 @@ def _whole_work_at_most(method, requested, ceiling):
     return _quantized_work(method, min(ceiling, hi+1e-7))
 
 
+def _refit_continuous_support(method, session, blocks, objectives, load, fits):
+    """Restore an independently dosed aerobic block after shortening a combination."""
+    parents = method.get("combined_methods")
+    if (session["purpose"] != "MAINTENANCE" or len(parents or []) != 2
+            or parents[1]["structure"] != "CONTINUOUS" or blocks is session["blocks"]):
+        return blocks
+    zone = parents[1]["zone"]
+    objective = objectives.get(zone) or {}
+    remaining = objective.get("remaining")
+    if zone not in {"Z1", "Z2"} or objective.get("basis") != "DIRECT_Q" or not remaining:
+        return blocks
+
+    def secondary_work(parts):
+        return [(i, b) for i, b in enumerate(parts) if b.get("combination_part") == 2
+                and b["kind"] == "WORK" and b["zone"] == zone]
+
+    current, original = secondary_work(blocks), secondary_work(session["blocks"])
+    if len(current) != 1 or len(original) != 1:
+        return blocks
+    index, block = current[0]
+    minutes = block["duration_min"]
+    # The pre-reservation prescription already respects this parent's role,
+    # readiness and coach limits. Recover at most its original whole half-minutes.
+    high = math.floor((original[0][1]["duration_min"] - minutes) * 2 + 1e-8)
+    if high < 1:
+        return blocks
+    direct, _, _ = load(blocks)
+    if direct[zone] >= remaining:
+        return blocks
+    low, best = 0, blocks
+    while low < high:
+        step = (low + high + 1) // 2
+        duration = minutes + step / 2
+        trial = blocks.copy()
+        trial[index] = {**block, "duration_min": duration, "duration_s": duration * 60}
+        trial_q, _, _ = load(trial)
+        if trial_q[zone] <= remaining + .001 and fits(trial):
+            low, best = step, trial
+        else:
+            high = step - 1
+    return best
+
+
 def _absolute_minimum(method):
     # Existing easy maintenance templates own their declared minimum. Their
     # upper dose still comes from capacity/readiness; building methods retain
@@ -4734,6 +4777,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         if not balanced_fit(parts):
                             selected_evidence["easy_work_cap_minutes"] = 0.
                             parts = core_parts
+                    parts = _refit_continuous_support(selected_method, session, parts, period_objectives,
+                        lambda trial: candidate_load(trial, capacity=selected_evidence), balanced_fit)
                     if parts != session["blocks"]:
                         q, e, technical = candidate_load(parts, capacity=selected_evidence)
                         actual_work = sum(b["duration_min"] for b in parts if b["kind"] == "WORK")
