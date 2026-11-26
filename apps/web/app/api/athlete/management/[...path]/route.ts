@@ -55,7 +55,7 @@ async function proxy(request: Request, context: Context) {
     if (write && !access.canEditPlan) return error("Този профил е достъпен само за преглед.", 403);
     if (endpoint === "generation-jobs" && !access.canEditPlan) return error("Нужно е право за редакция на плана.", 403);
     let body: string | undefined;
-    let plansWeek = endpoint === "generate" || endpoint === "day";
+    let plansWeek = endpoint === "generate";
     if (write) {
       // Full profile/preferences carry bounded athlete-owned variants and dated
       // structures. Keep small commands bounded separately from these snapshots.
@@ -117,7 +117,7 @@ async function proxy(request: Request, context: Context) {
     if (limit !== null) url.searchParams.set("limit", limit);
     if (comparisonQuery) for (const [key, value] of comparisonQuery) url.searchParams.set(key, value);
     const response = await fetch(url, {
-      method: request.method, cache: "no-store", signal: ["generation-jobs", "draft-metadata"].includes(endpoint)
+      method: request.method, cache: "no-store", signal: ["day", "generation-jobs", "draft-metadata"].includes(endpoint)
         ? AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]) : request.method === "GET"
         ? AbortSignal.any([request.signal, AbortSignal.timeout(75_000)])
         // Planning can finish after the ordinary read/write deadline on staging.
@@ -138,14 +138,14 @@ async function proxy(request: Request, context: Context) {
       ? "Профилът, програмата или входните данни са променени. Презаредете и прегледайте последната версия."
       : response.status === 422 ? endpoint === "methods/preferences" ? "Провери диапазоните. Методът трябва да поддържа избраната корекция; комбинираните отсечки имат собствена структура. Настройките не бяха записани." : "Проверете профила, периода и календара. Програмата не беше записана."
         : "Управлението временно не е достъпно. Въведените стойности остават във формата.", [404, 409, 422].includes(response.status) ? response.status : 503);
-    if (request.method !== "GET" && endpoint !== "race-duration" && endpoint !== "generation-jobs" && endpoint !== "training-proposals/preview") {
+    if (request.method !== "GET" && endpoint !== "race-duration" && endpoint !== "generation-jobs" && endpoint !== "day" && endpoint !== "training-proposals/preview") {
       revalidatePath("/planning");
       revalidatePath("/management");
       revalidatePath("/management/outlook");
       revalidatePath("/methods");
     }
     return NextResponse.json(await response.json(), { status: response.status,
-      headers: { "Cache-Control": "no-store", ...(endpoint === "generation-jobs" ? { "Retry-After": "5" } : {}) } });
+      headers: { "Cache-Control": "no-store", ...(["day", "generation-jobs"].includes(endpoint) ? { "Retry-After": "5" } : {}) } });
   } catch { return error("Управлението временно не е достъпно. Опитайте отново.", 503); }
 }
 

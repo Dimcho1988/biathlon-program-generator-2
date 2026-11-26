@@ -1,3 +1,4 @@
+import { parsePlanningJob } from "./planning-job";
 import { parseActivePlanResponse, type ActivePlanResponse } from "./training-management";
 import { isRecord } from "./training-status";
 
@@ -22,5 +23,6 @@ export async function changeActivePlan(endpoint: string, body: Record<string, un
   }
   const result: unknown = await response.json();
   if (!response.ok) throw new Error(isRecord(result) && typeof result.error === "string" ? result.error : "Програмата не беше променена.");
-  return { value: parseActivePlanResponse(result), conflict: false };
+  const job = endpoint === "day" && isRecord(result) && Object.hasOwn(result, "job") ? parsePlanningJob(result) : null;
+  return { value: parseActivePlanResponse(result), conflict: false, job };
 }

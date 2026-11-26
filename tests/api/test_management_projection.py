@@ -85,11 +85,13 @@ def test_every_management_http_transport_projects_private_learning(monkeypatch, 
     # The page's optional sync accessor is independent of the plan projection.
     class Repo:
         def sync_state(self, alias): return None
+        def planning_job(self, operation, **kwargs):
+            return {"job_id": "opaque", "kind": "DAY", "status":"QUEUED", "stage":"QUEUED", "request": payload}
     monkeypatch.setattr(dependencies, "repository", lambda: Repo())
     response = TestClient(main.app).request(method, "/api/v2/athlete/management"+path, json=body,
         headers={"X-OnFlows-Actor-Id": "11111111-1111-4111-8111-111111111111",
                  "Authorization": "Bearer projection-service", "X-OnFlows-Athlete-Alias": "athlete"})
-    assert response.status_code == 200, response.text
+    assert response.status_code == (202 if path == "/day" else 200), response.text
     assert "SECRET" not in response.text
     assert "SECRET" in json.dumps(payload)
 

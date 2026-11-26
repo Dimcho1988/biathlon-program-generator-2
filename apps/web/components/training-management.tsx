@@ -151,6 +151,21 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
   }
 
   const receiveGeneratedDraft = useCallback(async (job: PlanningJob, signal?: AbortSignal) => {
+    if (job.kind === 'DAY') {
+      const latest = parseActivePlanResponse(await requestJson("active", "GET", undefined, signal));
+      receiveActive(latest);
+      if (!latest.active || latest.active.revision < (job.result_active_revision ?? Infinity)) {
+        setAwaitingPublication(true);
+        setPlanningJob(job);
+        return false;
+      }
+      setNewDraft(false);
+      setAwaitingPublication(false);
+      setNotice(latest.active.payload.status === "REVIEW_REQUIRED"
+        ? "Изборът за деня е записан. Предложеният график изисква преглед."
+        : "Изборът за деня е записан. Показана е актуалната програма.");
+      return true;
+    }
     let paused = false;
     if (automaticPublication) {
       const latest = parseActivePlanResponse(await requestJson("active", "GET", undefined, signal));
@@ -196,7 +211,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
       const job = parsePlanningJob(value);
       if (cancelled) return;
       if (planningPending(job)) { setPlanningJob(job); setBusy('generate'); }
-      else if (job?.status === 'SUCCEEDED' && !initialActive.active) {
+      else if (job?.status === 'SUCCEEDED' && (!initialActive.active || job.kind === 'DAY' && (job.result_active_revision ?? 0) > initialActive.active.revision)) {
         await receiveGeneratedDraft(job, controller.signal);
         if (!cancelled) setPlanningJob(job);
       } else if (job?.status === 'FAILED') {
@@ -286,7 +301,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     anchor.href = url; anchor.download = `onflows-plan-${draft.payload.start_date}-v${draft.revision}.json`; anchor.click(); URL.revokeObjectURL(url);
   }
 
-  const generateForm = <form className="management-generate" onSubmit={generate}><fieldset disabled={!canEdit || busy !== null || !saved.configured}><label>Начало на седмицата<input aria-label="Начална дата на програмата" required type="date" min={earliestStart} max={latestStart} value={startDate} onChange={event => setStartDate(event.target.value)} /></label><button className="action-button" type="submit">{busy === "generate" ? "Подготвям програмата…" : "Подготви програма"}</button></fieldset></form>;
+  const generateForm = <form className="management-generate" onSubmit={generate}><fieldset disabled={!canEdit || busy !== null || pendingGeneration || !saved.configured}><label>Начало на седмицата<input aria-label="Начална дата на програмата" required type="date" min={earliestStart} max={latestStart} value={startDate} onChange={event => setStartDate(event.target.value)} /></label><button className="action-button" type="submit">{busy === "generate" ? "Подготвям програмата…" : "Подготви програма"}</button></fieldset></form>;
   return <main className="activities-page management-page">
     <RunningSpeedUnitControl/>
     <header className="activities-hero"><div className="activities-title"><div><p className="eyebrow">{athleteName}</p><h1>{view === "week" ? "Седмична програма" : "Дългосрочен план"}</h1><p>Подготовката в перспектива. Конкретната задача за всеки ден.</p></div></div><Link className="text-action" href="/planning">Профил за планиране →</Link></header>
@@ -295,7 +310,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     {error && <p className="management-error" role="alert">{error}</p>}{notice && <p className="management-notice" role="status">{notice}</p>}
     {pendingGeneration && planningJob && <section className="management-notice" aria-label="Подготовка на програмата">
       <p role="status">{planningStageLabel(planningJob)}</p>
-      <p>Начало: {dateLabel(planningJob.start_date)}. Можеш да отвориш друг раздел и да се върнеш по-късно. Заявката остава запазена.</p>
+      <p>{planningJob.kind === "DAY" ? "Промяна за" : "Начало"} {dateLabel(planningJob.start_date)}. Можеш да отвориш друг раздел и да се върнеш по-късно. Заявката остава запазена.</p>
     </section>}
     {syncError && <p className="management-error" role="alert">Обновяването не започна. Опитай отново или провери връзката с Intervals в настройките.</p>}
     {syncUnavailable && <p className="management-muted" role="status">Статусът на синхронизацията временно не е достъпен. Запазеният изглед остава видим.</p>}
@@ -314,7 +329,10 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     {view === "overview" && <IndividualLearningPanel plan={initialOutlook} />}
 
     {view === "overview" ? <TrainingPlanOverview plan={initialOutlook ?? undefined} outcomes={compactOverview?.outcomes ?? active.active?.payload.outcomes ?? []} today={today} currentProfileRevision={initialOutlook?.profile_revision} volumeContext={initialOutlook?.volume_context} sessions={overviewSessionsCurrent ? overviewSessions : undefined} sessionStatus={sessionStatus} /> : <>
-      {active.active && !newDraft && <ActiveTrainingPlan value={active} profile={saved} onChange={receiveActive} externalBusy={busy !== null} onBegin={beginActiveChange} onEnd={endActiveChange} canEdit={canEdit} today={today} selectedWeek={selectedWeek} showProposal={showProposal} renderDay={day => <DayCard day={day} />} />}
+      {active.active && !newDraft && <ActiveTrainingPlan value={active} profile={saved} onChange={receiveActive} externalBusy={busy !== null || pendingGeneration} onDayJob={job => {
+        setPlanningJob(job);
+        setAwaitingPublication(job.status === "SUCCEEDED");
+      }} onBegin={beginActiveChange} onEnd={endActiveChange} canEdit={canEdit} today={today} selectedWeek={selectedWeek} showProposal={showProposal} renderDay={day => <DayCard day={day} />} />}
       {showDraft && <>
         <section className="management-panel management-next-step" aria-label="Следваща стъпка"><p className="eyebrow">{guidance.step === "REVIEW" ? "Преглед преди започване" : "Следваща стъпка"}</p><h2>{guidance.title}</h2><p>{guidance.description}</p>
           {archivedDraft && <p className="management-notice">{draft?.stale_reason ?? "Показваният досега проект е остарял."} Избери „Подготви програма“, за да получиш проект с актуалните данни.</p>}

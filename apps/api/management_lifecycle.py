@@ -322,7 +322,9 @@ def _reconciliation_analysis(repository, alias, today, frozen, initial_read_phas
 
 def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, automatic=False,
             force=False, resume=False, day_action=None, include_saved_payload=True, record_unchanged_check=False,
-            _background_claim=None):
+            _background_claim=None, prepare_day_publication=False, on_progress=None):
+    if prepare_day_publication and (not day_action or automatic or not actor or expected_revision is None):
+        raise ValueError("A queued day edit requires the original actor and revision")
     now = now or datetime.now(timezone.utc)
     store = PlanStore(repository, background_claim=_background_claim) if _background_claim else PlanStore(repository)
     record = store.current(alias)
@@ -400,7 +402,8 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
         and envelope.get("generation_id") == frozen["generation_id"]
         and type(envelope.get("revision")) is int and envelope["revision"] == frozen["analysis_revision"])
     plan = management_service.build_draft(repository, alias, start, profile_revision, now=now, decisions=decisions,
-        locked_day=locked, _initial_read_phase=initial_read_phase if same_analysis else None,
+        locked_day=locked, **({"on_progress": on_progress} if on_progress else {}),
+        _initial_read_phase=initial_read_phase if same_analysis else None,
         **({"window_end": date.fromisoformat(candidate_window["end_date"])} if fixed else {}))
     if plan.get("source", {}).get("generation_id") != checkpoint.get("generation_id"):
         raise HTTPException(409, "Analysis changed during replanning")
@@ -449,6 +452,9 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
         receipt = store.record_unchanged_check(alias, expected_revision=record["revision"], actor_id=actor,
             expected_profile_revision=profile_revision, checkpoint=checkpoint)
         return {**record, "unchanged_check": receipt}
+    if prepare_day_publication:
+        return {"day_plan": payload, "operation": operation, "profile_revision": profile_revision,
+                "checkpoint": checkpoint}
     return store.save(alias, payload, record["revision"], actor, operation, profile_revision, checkpoint,
                       automatic=automatic, include_payload=include_saved_payload)
 

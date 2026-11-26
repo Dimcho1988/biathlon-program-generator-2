@@ -41,7 +41,6 @@ const planRequests = [
   ["generate", { start_date: "2026-10-12", expected_profile_revision: 1, expected_draft_revision: 0 }],
   ["action", { action: "REFRESH", expected_revision: 1 }],
   ["action", { action: "RESUME", expected_revision: 1 }],
-  ["day", { action: "REST", date: "2026-10-13", note: "", expected_revision: 1 }],
 ] as const;
 it.each(planRequests.flatMap(([path, body]) => [82_000, 240_000].map(ms => [path, ms, body] as const)))
 ("returns a successful %s plan calculation after %i ms without repeating the write", async (path, milliseconds, body) => {
@@ -73,9 +72,12 @@ it("retains the ordinary deadline for an action that does not calculate a plan",
   expect(fetch).toHaveBeenCalledTimes(1);
 });
 
-it('bounds background acceptance to 15 seconds without replaying a possibly queued write', async () => {
+it.each([
+  ['generation-jobs',{start_date:'2026-10-12',expected_profile_revision:1,expected_draft_revision:0}],
+  ['day',{date:'2026-10-13',action:'REST',note:'',expected_revision:1}],
+] as const)('bounds %s acceptance to 15 seconds without repeating the write', async (path,body) => {
   delayedApi(20_000);
-  const pending=send('generation-jobs',{start_date:'2026-10-12',expected_profile_revision:1,expected_draft_revision:0});
+  const pending=send(path,body);
   await vi.advanceTimersByTimeAsync(15_000);
   expect((await pending).status).toBe(503);
   expect(fetch).toHaveBeenCalledTimes(1);
