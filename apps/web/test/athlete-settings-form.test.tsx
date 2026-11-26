@@ -8,7 +8,7 @@ describe("athlete HR zone setup", () => {
   it("offers explicit retrospective scope and displays the saved effective date", () => {
     const html = renderToStaticMarkup(<AthleteSettingsForm editing initialHrmax={200} initialEffectiveFrom="2026-08-17" />);
     expect(html).toContain('name="hrmax_apply_mode"');
-    expect(html).toContain('<option value="LAST_90_DAYS" selected=""');
+    expect(html).toContain('<option value="LAST_40_DAYS" selected=""');
     expect(html).toContain('<option value="FROM_DATE"');
     expect(html).toContain("17.08.2026");
     expect(html).toContain("Измерените данни остават непроменени");

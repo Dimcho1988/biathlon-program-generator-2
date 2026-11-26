@@ -1929,7 +1929,7 @@ class SupabasePilotRepository(SnapshotRepository):
             )
         payload = [
             {
-                **dict(activity),
+                **{k: v for k, v in activity.items() if k != "refresh_checkpoint"},
                 "athlete_alias": athlete_alias,
                 "metadata_synced_at": datetime.now(timezone.utc).isoformat(),
                 "last_seen_at": datetime.now(timezone.utc).isoformat(),

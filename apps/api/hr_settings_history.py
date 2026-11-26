@@ -3,7 +3,7 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-DEFAULT_DAYS = 90
+DEFAULT_DAYS = 40
 MAX_DAYS = 180
 
 
@@ -17,7 +17,8 @@ def effective_date(body, settings, *, today=None):
     else:
         if selected is not None:
             raise ValueError("Начална дата се задава само при избор „От избрана дата“.")
-        selected = today-timedelta(days=DEFAULT_DAYS-1)
+        days = 90 if mode == "LAST_90_DAYS" else DEFAULT_DAYS
+        selected = today-timedelta(days=days-1)
     if not today-timedelta(days=MAX_DAYS-1) <= selected <= today:
         raise ValueError("Началната дата трябва да е в последните 180 дни, включително днес.")
     return selected.isoformat()

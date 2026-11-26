@@ -29,7 +29,7 @@ begin
  select model_preferences into revised from public.onflows_athlete_settings where athlete_alias=a;
  revision:=revised->>'hr_settings_revision';
  assert revised#>>'{hr_history,0,hrmax_bpm}'='190' and revised#>>'{hr_history,1,hrmax_bpm}'='200';
- assert (revised#>>'{hr_history,1,from}')::date=current_date-89;
+ assert (revised#>>'{hr_history,1,from}')::date=current_date-39;
  assert not onflows_private.hr_analysis_current(a),'Old analysis was labelled with the new HR calibration';
  assert exists(select 1 from public.onflows_sync_jobs where athlete_alias=a and status='QUEUED'
   and request_payload->>'reason'='HR_CALIBRATION_CHANGED'),'Correction did not enqueue a durable rebuild';

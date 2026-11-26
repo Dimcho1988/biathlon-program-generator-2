@@ -46,7 +46,7 @@ export function AthleteSettingsForm({
     initialSource ?? (!initialBounds && autoAvailable ? "AUTOMATIC_HRMAX" : "MANUAL")
   );
   const [hrmax, setHrmax] = useState(initialHrmaxSource === "TANAKA" ? "" : initialHrmax?.toString() ?? "");
-  const [applyMode, setApplyMode] = useState("LAST_90_DAYS");
+  const [applyMode, setApplyMode] = useState("LAST_40_DAYS");
   const [age, setAge] = useState(initialAge?.toString() ?? "");
   const predictedMaximum = age !== "" ? Math.floor(208 - 0.7 * Number(age) + 0.5) : null;
   const maximum = hrmax !== "" ? Number(hrmax) : predictedMaximum;
@@ -77,7 +77,7 @@ export function AthleteSettingsForm({
           <label className="timezone-field">
             <span>Период за преизчисляване</span>
             <select name="hrmax_apply_mode" value={applyMode} onChange={event => setApplyMode(event.target.value)}>
-              <option value="LAST_90_DAYS">За последните 90 дни</option>
+              <option value="LAST_40_DAYS">За последните 40 дни</option>
               <option value="FROM_DATE">От избрана дата</option>
             </select>
           </label>

@@ -39,7 +39,8 @@ def test_boundary_has_old_before_new_on_date_and_keeps_original():
 
 def test_defaults_and_date_validation():
     today=date(2026,11,14)
-    assert effective_date(AthleteSettingsInput(timezone='UTC'),settings(),today=today)=='2026-08-17'
+    assert effective_date(AthleteSettingsInput(timezone='UTC'),settings(),today=today)=='2026-10-06'
+    assert effective_date(AthleteSettingsInput(timezone='UTC',hrmax_apply_mode='LAST_90_DAYS'),settings(),today=today)=='2026-08-17'
     for day in (today+timedelta(days=1),today-timedelta(days=180),None):
         with pytest.raises(ValueError):
             effective_date(AthleteSettingsInput(timezone='UTC',hrmax_apply_mode='FROM_DATE',hrmax_effective_from=day),settings(),today=today)

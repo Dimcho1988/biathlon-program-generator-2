@@ -20,7 +20,7 @@ export async function POST(request: Request) {
     stage = "form";
     const form = await request.formData();
     const source = String(form.get("hr_zone_source") ?? "MANUAL");
-    const applyMode = String(form.get("hrmax_apply_mode") ?? "LAST_90_DAYS");
+    const applyMode = String(form.get("hrmax_apply_mode") ?? "LAST_40_DAYS");
     const effectiveFrom = String(form.get("hrmax_effective_from") ?? "").trim();
     const bounds = fieldNames.map((name) => Number(form.get(name)));
     const timezone = String(form.get("timezone") ?? "").trim();
@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     const indicator = String(form.get("leading_indicator") ?? "HEART_RATE");
     const resolvedMaximum = hrmax ?? (age !== null ? Math.floor(208 - .7 * age + .5) : null);
     if (
-      !["LAST_90_DAYS", "FROM_DATE"].includes(applyMode)
+      !["LAST_40_DAYS", "LAST_90_DAYS", "FROM_DATE"].includes(applyMode)
       || (applyMode === "FROM_DATE" && !/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom))
       || !["MANUAL", "AUTOMATIC_HRMAX"].includes(source)
       || (source === "MANUAL" && (

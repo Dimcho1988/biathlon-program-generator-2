@@ -1,4 +1,4 @@
-"""Code identities for the three durable calculation domains.
+"""Code identities for the durable calculation domains.
 
 Database revisions identify athlete inputs; these fingerprints identify the code
 that interprets them. They are computed once per process from the immutable
@@ -18,6 +18,7 @@ from threading import Lock
 
 _ROOT = Path(__file__).resolve().parents[2]
 _ROOTS = {
+    "activity": ("apps.api.real_service",),
     "dashboard": ("apps.api.model_service", "apps.api.planning_input_bundle",
                   "apps.api.schemas", "apps.api.read_session"),
     "learning": ("apps.api.learning_view", "apps.api.lifetime_history"),
@@ -30,6 +31,7 @@ _ROOTS = {
 # Keep route output/validation contracts in the identity, but their unrelated
 # write endpoints must not import the entire assistant into the model graph.
 _CONTRACTS = {
+    "activity": (),
     "dashboard": ("apps.api.prepared_models",),
     "learning": ("apps.api.prepared_learning",),
     "pages": ("apps.api.prepared_views", "apps.api.prepared_view_storage",
@@ -122,7 +124,7 @@ def source_manifest(domain, *, root=None, _release=False):
     return sources
 
 
-@lru_cache(maxsize=3)
+@lru_cache(maxsize=None)
 def _source_fingerprint(domain):
     # Sources and installed numerical/validation libraries are immutable for a
     # running process. Cache only their small digest, never athlete data.
@@ -139,7 +141,7 @@ def source_fingerprint(domain):
 
 
 def warm():
-    for domain in _ROOTS:
+    for domain in ("dashboard", "learning", "pages"):
         source_fingerprint(domain)
 
 

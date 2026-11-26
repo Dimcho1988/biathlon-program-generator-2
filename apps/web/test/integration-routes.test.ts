@@ -389,7 +389,7 @@ describe("integration route redirects behind a reverse proxy", () => {
       timezone: "Europe/Sofia",
       hrmax_bpm: 205,
       hr_zone_source: "MANUAL", age_years: null, leading_indicator: "HEART_RATE",
-      hrmax_apply_mode: "LAST_90_DAYS", hrmax_effective_from: null,
+      hrmax_apply_mode: "LAST_40_DAYS", hrmax_effective_from: null,
     });
   });
 
@@ -412,7 +412,7 @@ describe("integration route redirects behind a reverse proxy", () => {
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
       hr_zone_bounds_bpm: null, timezone: "Europe/Sofia", hrmax_bpm: 200,
       hr_zone_source: "AUTOMATIC_HRMAX", age_years: null, leading_indicator: "HEART_RATE",
-      hrmax_apply_mode: "LAST_90_DAYS", hrmax_effective_from: null,
+      hrmax_apply_mode: "LAST_40_DAYS", hrmax_effective_from: null,
     });
   });
 

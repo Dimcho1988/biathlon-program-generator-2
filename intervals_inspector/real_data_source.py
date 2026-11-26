@@ -404,6 +404,8 @@ def load_real_history(
     load_capacity_resolver: Callable[[str], Mapping[str, Any]] | None = None,
     activity_load_context_resolver: Callable[[str, date], Mapping[str, Any]] | None = None,
     configuration_resolver: Callable[[date], ShadowModelConfiguration] | None = None,
+    reuse_activity: Callable | None = None,
+    remember_activity: Callable | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> RealHistoryDataset:
     """Load and process one bounded real history in chronological order."""
@@ -504,97 +506,114 @@ def load_real_history(
                 if activity_ref_resolver is not None
                 else f"activity-{activity_ordinal:03d}"
             )
+            restored = reuse_activity(activity_ref, current_day) if reuse_activity else None
             try:
-                detail = _response_payload(
-                    client.get_activity_result(provider_id, include_intervals=True)
-                )
-                if not isinstance(detail, Mapping):
-                    raise TypeError("activity detail is not a mapping")
-                if _activity_date(detail) != current_day:
-                    raise ValueError("activity date does not match the history day")
-                if activity_detail_transformer is not None:
-                    try:
-                        detail = activity_detail_transformer(detail)
-                    except Exception as exc:
-                        raise _ExternalActivityCallbackFailure(
-                            "Activity sport correction failed"
-                        ) from exc
-                if activity_metadata_collector is not None:
-                    try:
-                        activity_metadata_collector(activity_ref, detail)
-                    except Exception as exc:
-                        raise _ExternalActivityCallbackFailure(
-                            "Activity metadata callback failed"
-                        ) from exc
-                strength_activity = is_strength_activity(detail)
-                duration_seconds = _activity_duration_seconds(
-                    detail, strength_activity=strength_activity
-                )
-                if strength_activity:
-                    summary = None
+                if restored is not None:
+                    detail, strength_activity, duration_seconds, summary, capacity = restored
+                    if not strength_activity:
+                        sport = str(detail.get("type") or "Unknown")
+                        component_load_contexts[sport] = capacity
+                        rows = summary["shadow_model_comparison"]["experimental"]["rows"]
+                        if rows:
+                            from intervals_inspector.shadow_model import configuration_for_sport
+                            config = configuration_for_sport(configuration_resolver(current_day)
+                                if configuration_resolver else selected_configuration, detail.get("type"))
+                            reference = calculate_shadow_result(_empty_intrazone_analysis(config), config,
+                                prior_daily_effective_load=prior_experimental_effective_load, activity_date=current_day)
+                            by_zone = {r["zone"]: r for r in _model_rows(reference)}
+                            for row in rows:
+                                row.update({k: v for k, v in by_zone[row["zone"]].items() if k.startswith("tref_")})
                 else:
-                    streams = _response_payload(
-                        client.get_streams_result(provider_id)
+                    detail = _response_payload(
+                        client.get_activity_result(provider_id, include_intervals=True)
                     )
-
-                    def publish_activity_shadow(
-                        shadow_detail: Mapping[str, Any],
-                        normalized: Any,
-                        *,
-                        ref: str = activity_ref,
-                    ) -> Mapping[str, Any]:
-                        if activity_shadow_processor is None:
-                            raise AssertionError(
-                                "activity shadow processor is unavailable"
-                            )
+                    if not isinstance(detail, Mapping):
+                        raise TypeError("activity detail is not a mapping")
+                    if _activity_date(detail) != current_day:
+                        raise ValueError("activity date does not match the history day")
+                    if activity_detail_transformer is not None:
                         try:
-                            return activity_shadow_processor(
-                                ref, shadow_detail, normalized
-                            )
+                            detail = activity_detail_transformer(detail)
                         except Exception as exc:
                             raise _ExternalActivityCallbackFailure(
-                                "Activity shadow callback failed"
+                                "Activity sport correction failed"
                             ) from exc
-
-                    from intervals_inspector.shadow_model import configuration_for_sport
-                    activity_configuration=configuration_for_sport(configuration_resolver(current_day) if configuration_resolver else selected_configuration,detail.get("type"))
-                    capacity_sport = str(detail.get("type") or "Unknown")
-                    if activity_load_context_resolver is not None:
-                        component_load_contexts[capacity_sport] = deepcopy(dict(activity_load_context_resolver(capacity_sport, current_day)))
-                    if capacity_sport not in component_load_contexts:
+                    if activity_metadata_collector is not None:
                         try:
-                            # Freeze nested maps too: later processing or other
-                            # sports cannot change a prior session's capacity.
-                            component_load_contexts[capacity_sport] = deepcopy(dict(load_capacity_resolver(capacity_sport))) if load_capacity_resolver else {}
-                            capacity_context = component_load_contexts[capacity_sport]
-                            resolve_zone_tmax(capacity_context.get("minutes"), capacity_context.get("sources"))
+                            activity_metadata_collector(activity_ref, detail)
                         except Exception as exc:
                             raise _ExternalActivityCallbackFailure(
-                                "Continuous capacity resolution failed"
+                                "Activity metadata callback failed"
                             ) from exc
-                    load_capacity = component_load_contexts[capacity_sport]
-                    summary = process_activity_payloads(
-                        detail,
-                        streams,
-                        include_1hz_preview=False,
-                        profile=profile_from_configuration(activity_configuration),
-                        experimental_configuration=activity_configuration,
-                        zone_tmax_minutes=load_capacity.get("minutes"),
-                        capacity_sources=load_capacity.get("sources"),
-                        unified_load_context=load_capacity if load_capacity.get("unified_load_version") else None,
-                        prior_baseline_effective_load=(
-                            prior_baseline_effective_load
-                        ),
-                        prior_experimental_effective_load=(
-                            prior_experimental_effective_load
-                        ),
-                        shadow_processor=(
-                            None
-                            if activity_shadow_processor is None
-                            else publish_activity_shadow
-                        ),
-                        propagate_shadow_processor_errors=True,
+                    strength_activity = is_strength_activity(detail)
+                    duration_seconds = _activity_duration_seconds(
+                        detail, strength_activity=strength_activity
                     )
+                    if strength_activity:
+                        summary = None
+                    else:
+                        streams = _response_payload(
+                            client.get_streams_result(provider_id)
+                        )
+
+                        def publish_activity_shadow(
+                            shadow_detail: Mapping[str, Any],
+                            normalized: Any,
+                            *,
+                            ref: str = activity_ref,
+                        ) -> Mapping[str, Any]:
+                            if activity_shadow_processor is None:
+                                raise AssertionError(
+                                    "activity shadow processor is unavailable"
+                                )
+                            try:
+                                return activity_shadow_processor(
+                                    ref, shadow_detail, normalized
+                                )
+                            except Exception as exc:
+                                raise _ExternalActivityCallbackFailure(
+                                    "Activity shadow callback failed"
+                                ) from exc
+
+                        from intervals_inspector.shadow_model import configuration_for_sport
+                        activity_configuration=configuration_for_sport(configuration_resolver(current_day) if configuration_resolver else selected_configuration,detail.get("type"))
+                        capacity_sport = str(detail.get("type") or "Unknown")
+                        if activity_load_context_resolver is not None:
+                            component_load_contexts[capacity_sport] = deepcopy(dict(activity_load_context_resolver(capacity_sport, current_day)))
+                        if capacity_sport not in component_load_contexts:
+                            try:
+                                # Freeze nested maps too: later processing or other
+                                # sports cannot change a prior session's capacity.
+                                component_load_contexts[capacity_sport] = deepcopy(dict(load_capacity_resolver(capacity_sport))) if load_capacity_resolver else {}
+                                capacity_context = component_load_contexts[capacity_sport]
+                                resolve_zone_tmax(capacity_context.get("minutes"), capacity_context.get("sources"))
+                            except Exception as exc:
+                                raise _ExternalActivityCallbackFailure(
+                                    "Continuous capacity resolution failed"
+                                ) from exc
+                        load_capacity = component_load_contexts[capacity_sport]
+                        summary = process_activity_payloads(
+                            detail,
+                            streams,
+                            include_1hz_preview=False,
+                            profile=profile_from_configuration(activity_configuration),
+                            experimental_configuration=activity_configuration,
+                            zone_tmax_minutes=load_capacity.get("minutes"),
+                            capacity_sources=load_capacity.get("sources"),
+                            unified_load_context=load_capacity if load_capacity.get("unified_load_version") else None,
+                            prior_baseline_effective_load=(
+                                prior_baseline_effective_load
+                            ),
+                            prior_experimental_effective_load=(
+                                prior_experimental_effective_load
+                            ),
+                            shadow_processor=(
+                                None
+                                if activity_shadow_processor is None
+                                else publish_activity_shadow
+                            ),
+                            propagate_shadow_processor_errors=True,
+                        )
             except _ExternalActivityCallbackFailure:
                 raise
             except IntervalsAPIError as exc:
@@ -640,6 +659,9 @@ def load_real_history(
                 )
                 continue
 
+            if restored is None and remember_activity:
+                remember_activity(activity_ref, current_day, detail, strength_activity,
+                                  duration_seconds, summary, None if strength_activity else load_capacity)
             processed += 1
             if strength_activity:
                 metadata = {
