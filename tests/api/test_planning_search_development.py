@@ -86,3 +86,75 @@ def test_manual_target_conflict_is_not_reported_as_completed_even_at_100_percent
     result = planning_search.improve(baseline, {}, lambda _: pytest.fail("No useful redistribution"))
     assert result["allocation"]["search"]["configuration_conflict"] is True
     assert result["allocation"]["search"]["conclusion"] == "CONFIGURATION_CONFLICT"
+
+
+def zone_plan(z2, z4, z5, kind="BUILD"):
+    allocation = {"components": {}, "segments": [], "development": {"segments": []}}
+    first, end = "2026-11-27", "2026-12-03"
+    rows = {z: {"target": 100., "basis": "DIRECT_Q", "actual": 0., "planned": value}
+            for z, value in (("Z2", z2), ("Z4", z4), ("Z5", z5))}
+    allocation["components"] = rows
+    allocation["segments"].append({"window_start": first, "window_end": end, "components": rows})
+    allocation["development"]["segments"].append({"window_start": first, "kind": kind,
+        "assessed": kind == "BUILD", "target_shortfall": 0})
+    return {"days": [], "allocation": allocation}
+
+
+@pytest.mark.parametrize("z2,expected_z4", [(89., 0.), (90., 95.), (110., 95.), (111., 0.)])
+def test_building_first_fills_z4_without_losing_an_accepted_zone(z2, expected_z4):
+    baseline = zone_plan(100., 0., 100.)
+    def replay(policy):
+        if policy.get("building_pass") == "CORE":
+            return zone_plan(100., 100., 100.)  # A provisional plan can never win.
+        if policy.get("building_pass") == "FILL":
+            return zone_plan(z2, 95., 100.)
+        return deepcopy(baseline)
+    result = planning_search.improve(baseline, {}, replay)
+    assert result["allocation"]["components"]["Z4"]["planned"] == expected_z4
+
+
+def test_recovery_gap_only_uses_maintenance_pass_and_ignores_unknown_or_inactive_targets():
+    baseline = zone_plan(100., 0., 100., kind="RECOVERY")
+    rows = baseline["allocation"]["components"]
+    rows["Z2"].update(planned=0, objective_active=False)
+    rows["Z5"]["actual"] = None
+    def replay(policy):
+        assert policy.get("building_pass") != "CORE"
+        if policy.get("building_pass") == "FILL":
+            assert policy["cycle_shortfalls"] == {"2026-11-27": {"Z4": .9}}
+            assert policy["reservation_methods"] == {}
+        return deepcopy(baseline)
+    planning_search.improve(baseline, {}, replay)
+
+
+def test_local_repair_keeps_building_slots_and_uses_an_open_training_day():
+    plan = zone_plan(100., 0., 100.)
+    reference = {"method_id": "Z5-METHOD", "slot": 1, "zone": "Z5", "sport": "Run", "purpose": "BUILDING",
+                 "blocks": [{"kind": "WORK", "zone": "Z5", "duration_min": 10.}],
+                 "dose_evidence": {"standard_method_work_minutes": 10.}, "direct_equivalent_minutes": {"Z5": 10.}}
+    plan["days"] = [{"date": "2026-11-27", "status": "TRAINING", "sessions": [reference]},
+                    {"date": "2026-11-28", "status": "REST", "locked": True},
+                    {"date": "2026-11-29", "status": "EXISTING_ACTIVITY"}]
+    plan["lookahead_days"] = [{"date": "2026-11-30", "status": "REST", "sessions": []}]
+    pins, changes = planning_search.maintenance_replacements(plan, planning_search.cycle_shortfalls(plan), {})
+    assert changes == {"2026-11-27": {"date": "2026-11-30", "slot": 1, "zone": "Z4"}}
+    assert pins["2026-11-27"][0]["method_id"] == "Z5-METHOD"
+
+
+@pytest.mark.parametrize("limit", [1, 12])
+def test_fill_cannot_displace_the_reference_that_covers_another_zone(monkeypatch, limit):
+    monkeypatch.setattr(planning_search, "MAX_UNIQUE_REPLAYS", limit)
+    baseline = zone_plan(45., 36., 100.)
+    reference = zone_plan(100., 76., 100.)
+    tradeoff = zone_plan(89., 96., 100.)
+    calls = []
+
+    def replay(policy):
+        calls.append(policy)
+        return deepcopy(tradeoff if policy.get("building_pass") else reference)
+
+    chosen = planning_search.improve(baseline, {}, replay)
+    assert not calls[0].get("building_pass")
+    assert chosen["allocation"]["components"]["Z2"]["planned"] == 100.
+    if limit > 1:
+        assert any(p.get("building_pass") == "FILL" for p in calls)
