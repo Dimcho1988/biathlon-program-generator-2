@@ -29,7 +29,10 @@ begin
  where athlete_alias=a;
  assert public.onflows_management_checkpoint(a)<>checkpoint,
    'Changing the leading indicator must invalidate a saved plan checkpoint';
+ observation := observation || jsonb_build_object('local_date', current_date-2);
  assert public.increase_onflows_hrmax(a,205,200,observation);
+ assert (select (model_preferences#>>'{hr_history,-1,from}')::date=current_date-2
+   from public.onflows_athlete_settings where athlete_alias=a);
  assert not public.increase_onflows_hrmax(a,206,200,observation || '{"raw_mean_bpm":199}'::jsonb),
    'Stale settings must never overwrite a newer maximum';
  assert not public.increase_onflows_hrmax(a,204,205,observation || '{"raw_mean_bpm":197}'::jsonb),

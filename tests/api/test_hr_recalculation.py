@@ -73,6 +73,9 @@ def test_local_month_rebuild_matches_full_refresh_and_keeps_prefix(monkeypatch, 
     from intervals_inspector.intervals_client import IntervalsResponse
     from tests.api.test_hr_settings_history import calibration
 
+    # Two correction days and forty complete preceding dates.
+    history_env = {**ENV, "ONFLOWS_HISTORY_DAYS": "42"}
+
     class Recordings(Client):
         def get_activities_result(self, *args):
             return IntervalsResponse(200, [{"id": day, "start_date_local": day+"T08:00:00"}
@@ -127,7 +130,7 @@ def test_local_month_rebuild_matches_full_refresh_and_keeps_prefix(monkeypatch, 
             from apps.api import activity_shadow_pipeline
             legacy.setattr(activity_shadow_pipeline, "HRMOD_MODEL_VERSION", "hrmod_mirror_area_shift_v9")
             legacy.setattr(activity_shadow_pipeline, "compensate", lambda rows, hrmod, **kwargs: hrmod)
-        refresh(repo, environ=ENV, client=Recordings(), period_end=date(2026,8,15), athlete_settings=old)
+        refresh(repo, environ=history_env, client=Recordings(), period_end=date(2026,8,15), athlete_settings=old)
     before = repo.latest("pilot")
     old_catalog = deepcopy(repo._activity_catalog)
     for row in repo._activity_catalog.values():
@@ -150,7 +153,7 @@ def test_local_month_rebuild_matches_full_refresh_and_keeps_prefix(monkeypatch, 
     full_repo = Repository()
     full_repo.settings = new
     full_repo._activity_identity = deepcopy(repo._activity_identity)
-    refresh(full_repo, environ=ENV, client=Recordings(), period_end=date(2026,8,15), athlete_settings=new)
+    refresh(full_repo, environ=history_env, client=Recordings(), period_end=date(2026,8,15), athlete_settings=new)
     full = full_repo.latest("pilot")
     def same(actual, expected):
         if isinstance(expected, float):
@@ -223,3 +226,12 @@ def test_calibration_timings_preserve_outer_context_and_failure(caplog):
         assert '"thread_cpu_ms":' in caplog.text
     finally:
         current_metrics.reset(token)
+
+def test_local_rebuild_requires_the_first_preceding_reference_day():
+    from apps.api.hr_recalculation import refresh_hr_calibration, StoredCalibrationUnavailable
+    source = {"period_start": "2026-07-06", "activities": [{}],
+              "hr_calibration_history": [{}], "hr_settings_revision": "old"}
+    repo = SimpleNamespace(latest=lambda _: {"load_history": source})
+    with pytest.raises(StoredCalibrationUnavailable, match="40 days preceding"):
+        refresh_hr_calibration(repo, athlete_alias="pilot", base_generation_id="base",
+                               athlete_settings=SimpleNamespace(hr_recompute_from="2026-08-14"))

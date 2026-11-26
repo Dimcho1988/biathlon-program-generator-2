@@ -1,10 +1,15 @@
 """Date-effective HR calibration. Recorded sensor measurements are immutable."""
+from calendar import monthrange
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-DEFAULT_DAYS = 90
-MAX_DAYS = 180
+DEFAULT_DAYS = 40
+
+
+def earliest_effective_date(today):
+    year = today.year - 1
+    return date(year, today.month, min(today.day, monthrange(year, today.month)[1]))
 
 
 def effective_date(body, settings, *, today=None):
@@ -17,9 +22,10 @@ def effective_date(body, settings, *, today=None):
     else:
         if selected is not None:
             raise ValueError("Начална дата се задава само при избор „От избрана дата“.")
-        selected = today-timedelta(days=DEFAULT_DAYS-1)
-    if not today-timedelta(days=MAX_DAYS-1) <= selected <= today:
-        raise ValueError("Началната дата трябва да е в последните 180 дни, включително днес.")
+        days = {"FROM_TODAY": 1, "LAST_90_DAYS": 90, "LAST_40_DAYS": DEFAULT_DAYS}[mode]
+        selected = today - timedelta(days=days - 1)
+    if not earliest_effective_date(today) <= selected <= today:
+        raise ValueError("Началната дата трябва да е в последните 12 месеца, включително днес.")
     return selected.isoformat()
 
 
@@ -52,4 +58,7 @@ def validate(settings):
 def history_days(settings, end, default):
     """Keep a requested older correction inside the normal bounded import lane."""
     start = getattr(settings, "hr_recompute_from", None)
-    return max(default, min(MAX_DAYS+39, (end-date.fromisoformat(start)).days+40)) if start else default
+    if not start:
+        return default
+    first = max(date.fromisoformat(start), earliest_effective_date(end))
+    return max(default, (end - first).days + 1 + 40)

@@ -171,6 +171,8 @@ def refresh_hr_calibration(repository, *, athlete_alias, athlete_settings, base_
     if (not first or not source.get("activities") or first < source.get("period_start", "9999")
             or not source.get("hr_calibration_history") or not source.get("hr_settings_revision")):
         raise StoredCalibrationUnavailable("Stored history does not cover the requested correction")
+    if not model_upgrade and (date.fromisoformat(first) - date.fromisoformat(source["period_start"])).days < 40:
+        raise StoredCalibrationUnavailable("Stored history does not cover the 40 days preceding the correction")
     if ((source.get("component_load_model") or {}).get("version") != COMPONENT_VERSION
             or (source.get("load_selection") or {}).get("selection_policy") != load_policy_identity()):
         raise StoredCalibrationUnavailable("Stored history uses an older load policy")

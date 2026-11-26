@@ -39,8 +39,15 @@ def test_boundary_has_old_before_new_on_date_and_keeps_original():
 
 def test_defaults_and_date_validation():
     today=date(2026,11,14)
-    assert effective_date(AthleteSettingsInput(timezone='UTC'),settings(),today=today)=='2026-08-17'
-    for day in (today+timedelta(days=1),today-timedelta(days=180),None):
+    assert effective_date(AthleteSettingsInput(timezone='UTC'),settings(),today=today)=='2026-10-06'
+    assert effective_date(AthleteSettingsInput(timezone='UTC',hrmax_apply_mode='LAST_90_DAYS'),settings(),today=today)=='2026-08-17'
+    assert effective_date(AthleteSettingsInput(timezone='UTC',hrmax_apply_mode='FROM_TODAY'),settings(),today=today)==today.isoformat()
+    for end, first in ((today,date(2025,11,14)),(date(2024,2,29),date(2023,2,28)),(date(2025,2,28),date(2024,2,28))):
+        body=AthleteSettingsInput(timezone='UTC',hrmax_apply_mode='FROM_DATE',hrmax_effective_from=first)
+        assert effective_date(body,settings(),today=end)==first.isoformat()
+        with pytest.raises(ValueError):
+            effective_date(body.model_copy(update={"hrmax_effective_from": first-timedelta(days=1)}),settings(),today=end)
+    for day in (today+timedelta(days=1),date(2025,11,13),None):
         with pytest.raises(ValueError):
             effective_date(AthleteSettingsInput(timezone='UTC',hrmax_apply_mode='FROM_DATE',hrmax_effective_from=day),settings(),today=today)
     assert effective_date(AthleteSettingsInput(timezone='UTC',hrmax_apply_mode='FROM_DATE',hrmax_effective_from=today),settings(),today=today)==today.isoformat()
@@ -48,8 +55,9 @@ def test_defaults_and_date_validation():
 
 def test_rebuild_has_40_day_context_and_bounded_older_range():
     s=replace(settings(),hr_recompute_from='2026-08-17')
-    assert history_days(s,date(2026,11,14),90)==129
-    assert history_days(replace(s,hr_recompute_from='2026-01-01'),date(2026,11,14),90)==219
+    assert history_days(s,date(2026,11,14),90)==130
+    assert history_days(replace(s,hr_recompute_from='2025-11-14'),date(2026,11,14),90)==406
+    assert history_days(replace(s,hr_recompute_from='2023-02-28'),date(2024,2,29),90)==407
 
 
 def test_historical_model_uses_activity_date_not_previous_evidence_date():
@@ -141,3 +149,30 @@ def test_reconstructed_load_uses_each_activity_calibration(monkeypatch):
     assert maxima==[190,200]
     assert bounds==[tuple(bounds_from_hrmax(m,PERCENTAGES)) for m in maxima]
     assert result['load_selection']['reconstructed_activities']==2
+
+def test_year_correction_imports_the_boundary_and_full_reference_period(monkeypatch):
+    from apps.api import activity_shadow_pipeline
+    from intervals_inspector.intervals_client import IntervalsResponse
+
+    first, end = date(2023,2,28), date(2024,2,29)
+    observed = {}
+    class BoundaryClient(Client):
+        def get_activities_result(self, oldest, newest):
+            assert (oldest, newest) == ((first-timedelta(days=40)).isoformat(), end.isoformat())
+            return IntervalsResponse(200, [{"id": day.isoformat(), "start_date_local": day.isoformat()+"T08:00:00"}
+                for day in (first-timedelta(days=1), first, end)])
+        def get_activity_result(self, key, **kwargs):
+            original = super().get_activity_result(key, **kwargs)
+            return IntervalsResponse(200, {**original.payload, "start_date_local": key+"T08:00:00"})
+    original = activity_shadow_pipeline.compute_activity_shadow
+    def capture(**kwargs):
+        observed[kwargs["detail"]["id"]] = kwargs["explicit_hrmax_bpm"]
+        return original(**kwargs)
+    monkeypatch.setattr(activity_shadow_pipeline, "compute_activity_shadow", capture)
+    current = replace(settings(), hr_recompute_from=first.isoformat(),
+        hr_history=(calibration(190,"0001-01-01"),calibration(200,first.isoformat())))
+    repo = InMemorySnapshotRepository()
+    refresh(repo, environ=ENV, client=BoundaryClient(), period_end=end, athlete_settings=current)
+    assert observed == {"2023-02-27":190, "2023-02-28":200, "2024-02-29":200}
+    source = repo.latest("pilot")["load_history"]
+    assert len({row["date"] for row in source["daily"]}) == 407

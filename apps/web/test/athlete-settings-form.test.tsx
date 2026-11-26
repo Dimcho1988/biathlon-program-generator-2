@@ -1,15 +1,43 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { describe, expect, it, vi } from "vitest";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AthleteSettingsForm } from "../components/athlete-settings-form";
 
 const percentages = [50, 60, 70, 80, 90, 100]; // Synthetic test scheme, no product default.
 
 describe("athlete HR zone setup", () => {
+  it("prefills a full calendar year and resolves today in the athlete timezone", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.setSystemTime(new Date("2024-02-28T23:30:00Z"));
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<AthleteSettingsForm editing initialTimezone="Europe/Sofia" />));
+      const select = container.querySelector<HTMLSelectElement>('[name="hrmax_apply_mode"]')!;
+      expect(select.options).toHaveLength(3);
+      expect(select.value).toBe("LAST_40_DAYS");
+      await act(async () => { select.value = "FROM_DATE"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+      const input = container.querySelector<HTMLInputElement>('input[type="date"]')!;
+      expect([input.min, input.value, input.max]).toEqual(["2023-02-28", "2023-02-28", "2024-02-29"]);
+      await act(async () => { select.value = "FROM_TODAY"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+      expect(container.querySelector('input[type="date"]')).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("offers explicit retrospective scope and displays the saved effective date", () => {
     const html = renderToStaticMarkup(<AthleteSettingsForm editing initialHrmax={200} initialEffectiveFrom="2026-08-17" />);
     expect(html).toContain('name="hrmax_apply_mode"');
-    expect(html).toContain('<option value="LAST_90_DAYS" selected=""');
+    expect(html).toContain('<option value="LAST_40_DAYS" selected=""');
+    expect(html).toContain('<option value="FROM_TODAY"');
     expect(html).toContain('<option value="FROM_DATE"');
+    expect(html).toContain('до 12 месеца назад');
+    expect(html).not.toContain('LAST_90_DAYS');
     expect(html).toContain("17.08.2026");
     expect(html).toContain("Измерените данни остават непроменени");
     expect(renderToStaticMarkup(<AthleteSettingsForm />)).not.toContain('name="hrmax_apply_mode"');

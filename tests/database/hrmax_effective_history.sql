@@ -29,7 +29,7 @@ begin
  select model_preferences into revised from public.onflows_athlete_settings where athlete_alias=a;
  revision:=revised->>'hr_settings_revision';
  assert revised#>>'{hr_history,0,hrmax_bpm}'='190' and revised#>>'{hr_history,1,hrmax_bpm}'='200';
- assert (revised#>>'{hr_history,1,from}')::date=current_date-89;
+ assert (revised#>>'{hr_history,1,from}')::date=current_date-39;
  assert not onflows_private.hr_analysis_current(a),'Old analysis was labelled with the new HR calibration';
  assert exists(select 1 from public.onflows_sync_jobs where athlete_alias=a and status='QUEUED'
   and request_payload->>'reason'='HR_CALIBRATION_CHANGED'),'Correction did not enqueue a durable rebuild';
@@ -74,5 +74,19 @@ begin
   '{load_history,hr_settings_revision}',to_jsonb(revised->>'hr_settings_revision')) where athlete_alias=a;
  update public.onflows_analysis_generations set status='ACTIVE' where athlete_alias=a;
  assert onflows_private.hr_analysis_current(a),'Current worker generation was rejected';
+ -- Earliest accepted calendar date is inclusive. One more day is invalid.
+ update public.onflows_athlete_settings set hrmax_bpm=201,hr_zone_bounds=array[90,144,158,178,188,201],
+  model_preferences=model_preferences||jsonb_build_object('hrmax_apply_from',(current_date-interval '1 year')::date)
+  where athlete_alias=a;
+ assert (select (model_preferences#>>'{hr_history,-1,from}')::date=(current_date-interval '1 year')::date
+  from public.onflows_athlete_settings where athlete_alias=a);
+ denied:=false;
+ begin
+  update public.onflows_athlete_settings set hrmax_bpm=202,hr_zone_bounds=array[90,144,158,178,188,202],
+   model_preferences=model_preferences||jsonb_build_object('hrmax_apply_from',(current_date-interval '1 year')::date-1)
+   where athlete_alias=a;
+ exception when invalid_parameter_value then denied:=true;
+ end;
+ assert denied,'Accepted a correction beyond the calendar year';
 end $$;
 rollback;

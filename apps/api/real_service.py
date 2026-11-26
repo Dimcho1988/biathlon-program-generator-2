@@ -5,7 +5,8 @@ Provider credentials stop at :func:`refresh`; downstream code receives an
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from copy import deepcopy
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import hashlib
@@ -1262,8 +1263,8 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         from .refresh_speed_evidence import expected_activity_dates
         # ProviderReplay serves this same list to load_real_history without a
         # second download. Expected counts distinguish rest from failed detail.
-        expected_refresh_dates = expected_activity_dates(
-            provider.get_activities_result(start.isoformat(), end.isoformat()).payload, start, end)
+        listed = provider.get_activities_result(start.isoformat(), end.isoformat()).payload
+        expected_refresh_dates = expected_activity_dates(listed, start, end)
         from intervals_inspector.real_data_source import _activity_duration_seconds, is_strength_activity
         from .activity_shadow_pipeline import (
             activity_shadow_configuration_fingerprint,
@@ -1273,11 +1274,18 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         catalog_metadata: dict[str, dict[str, Any]] = {}
         from .device_laps import load_device_laps
         original_file_reader = getattr(provider, "get_activity_file_result", None)
-        previous_laps = {
-            str(row["activity_ref"]): row.get("intervals") or []
-            for row in (repository.activity_calendar(context.public_alias, start, end)
-                        if previous and callable(original_file_reader) else ())
-        }
+        from .activity_refresh import ActivityRefresh, calculation_version, compact_summary, digest, pack
+        release = calculation_version(listed)
+        previous_catalog = ()
+        speed_inputs = None
+        if previous and release and callable(getattr(repository, "_request", None)):
+            from . import model_service
+            speed_inputs = model_service.speed_view_inputs(repository, context.public_alias)
+            previous_catalog = tuple(r for r in speed_inputs["calendar"]["activities"]
+                                     if start.isoformat() <= r["local_date"] <= end.isoformat())
+        elif previous and (release or callable(original_file_reader)):
+            previous_catalog = repository.activity_calendar(context.public_alias, start, end)
+        previous_laps = {r["activity_ref"]: r.get("intervals") or [] for r in previous_catalog}
         catalog_sport_classifications: dict[str, dict[str, Any]] = {}
         catalog_provider_keys: dict[str, str] = {}
         shadow_runs: dict[str, str] = {}
@@ -1289,13 +1297,21 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         rules_reader = getattr(repository, "activity_sport_rules", None)
         sport_rules = rules_reader(context.public_alias) if callable(rules_reader) else ()
 
-        def resolve_activity_ref(provider_activity_id: str) -> str:
-            key = provider_activity_key(
+        def key_for(provider_activity_id):
+            return provider_activity_key(
                 provider_athlete_id=context.provider_athlete_id,
                 provider_activity_id=provider_activity_id,
                 secret=identity_secret,
             )
-            activity_ref = repository.resolve_activity_ref(
+
+        cache = ActivityRefresh(listed, previous_catalog, previous, start=start, end=end,
+                                key_for=key_for, release=release, sport_rules=sport_rules)
+        trainability = {}
+        peaks = {}
+
+        def resolve_activity_ref(provider_activity_id: str) -> str:
+            key = key_for(provider_activity_id)
+            activity_ref = cache.refs.get(key) or repository.resolve_activity_ref(
                 context.public_alias, key
             )
             catalog_provider_keys[activity_ref] = key
@@ -1406,30 +1422,35 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             }
 
         def record_observed_peak(shadow, activity_ref, sport):
+            trainability[activity_ref] = shadow.get("trainability_index")
             from biathlon.hrmax import observed_peak
             from biathlon.sport_heart_rate import reference_offset
             candidate = observed_peak(shadow.get("timeseries", ()), offset_bpm=reference_offset(sport))
             if candidate is not None:
-                observed_hrmax_candidates.append({**candidate, "activity_ref": activity_ref, "sport": sport})
+                peaks[activity_ref] = {**candidate, "activity_ref": activity_ref, "sport": sport,
+                                       "local_date": catalog_metadata[activity_ref]["local_date"]}
+                observed_hrmax_candidates.append(peaks[activity_ref])
 
         from .component_load_context import context_from_speed_view, read_contexts
         load_capacity_contexts = {}
         historical_load_contexts = {}
-        speed_inputs = None
         def refreshed_speed_inputs(day):
             nonlocal speed_inputs, refresh_speed_evidence
             from . import model_service
             from .refresh_speed_evidence import RefreshSpeedEvidence
             if refresh_speed_evidence is None:
-                speed_inputs = model_service.speed_view_inputs(repository, context.public_alias)
+                if speed_inputs is None:
+                    speed_inputs = model_service.speed_view_inputs(repository, context.public_alias)
                 refresh_speed_evidence = RefreshSpeedEvidence(speed_inputs, start, end,
                     expected_activity_dates=expected_refresh_dates)
                 # The first detail is collected before capacity resolution.
                 for metadata in catalog_metadata.values():
-                    refresh_speed_evidence.record(metadata)
+                    refresh_speed_evidence.record(metadata, {"trainability_index": trainability.get(metadata["activity_ref"])})
             return refresh_speed_evidence.at(day)
 
-        def activity_load_context(sport, day):
+        evidence_keys = {}
+
+        def activity_load_context(sport, day, saved=None):
             from . import model_service
             if not callable(getattr(repository, "_request", None)):
                 value = load_capacity_for_sport(sport)
@@ -1437,9 +1458,23 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             identity = (sport, day)
             if identity not in historical_load_contexts:
                 historical_inputs = refreshed_speed_inputs(day-timedelta(days=1))
+                historical = model_service.historical_speed_inputs(historical_inputs, day,
+                    evaluation_day=speed_inputs["today"])
+                if release:
+                    # Hash the exact prior-day inputs, including test availability and
+                    # coverage of rest days. Current-day recordings are excluded.
+                    evidence_key = digest({
+                        "settings": asdict(historical["settings"]), "calendar": historical["calendar"],
+                        "history": historical["history"], "entries": historical["entries"],
+                        "initial_profile": historical.get("initial_profile"), "sport": sport,
+                        "evaluation_day": speed_inputs["today"].isoformat(), "activity_day": day.isoformat(),
+                    })
+                    evidence_keys[identity] = evidence_key
+                    if saved and saved.get("evidence") == evidence_key and saved.get("capacity"):
+                        historical_load_contexts[identity] = saved["capacity"]
+                        return saved["capacity"]
                 view = model_service.speed_view(repository, context.public_alias, sport,
-                    _inputs=model_service.historical_speed_inputs(historical_inputs, day,
-                        evaluation_day=speed_inputs["today"]), _capacity_only=True)
+                    _inputs=historical, _capacity_only=True)
                 value = context_from_speed_view(view)
                 from biathlon import load_evidence, unified_load
                 if load_evidence.supports_recording(sport):
@@ -1470,6 +1505,55 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             dated = hr_settings_at(athlete_settings, day) if athlete_settings else None
             return configuration_with_hr_boundaries(dated.zone_bounds_bpm, hrmax_bpm=dated.hrmax_bpm) if dated else configuration_with_hr_boundaries(context.zone_bounds_bpm, hrmax_bpm=context.hrmax_bpm)
 
+        def calibration_key(day, capacity):
+            scientific_capacity = {k: v for k, v in (capacity or {}).items()
+                                   if k not in ("source_revision", "source_generation_id")}
+            return digest([dated_configuration(day).fingerprint, scientific_capacity])
+
+        def remember_activity(ref, day, detail, strength, duration, summary, capacity):
+            signature = cache.signatures.get(catalog_provider_keys[ref])
+            if not signature or any(item.get("status") == "retry" for item in previous_laps.get(ref, ())):
+                return
+            cache.records[ref] = {
+                "signature": signature, "calibration": calibration_key(day, capacity),
+                "detail": {k: detail.get(k) for k in ("type", "sport", "sub_type")},
+                "strength": strength, "duration": duration, "summary": compact_summary(summary),
+                "metadata_keys": list(catalog_metadata[ref]), "original_sport": catalog_metadata[ref]["sport"],
+                "index": trainability.get(ref), "peak": peaks.get(ref),
+                "source_hash": scientific_input_hashes.get(ref),
+                "evidence": evidence_keys.get((str(detail.get("type") or "Unknown"), day)),
+                "capacity": capacity if evidence_keys else None,
+            }
+
+        def reuse_activity(ref, day):
+            prior = cache.prior.get(ref)
+            if prior is None:
+                return None
+            saved = cache.saved[ref]
+            detail = saved["detail"]
+            capacity = None if saved["strength"] else activity_load_context(str(detail.get("type") or "Unknown"), day, saved)
+            if (calibration_key(day, capacity) != saved["calibration"]
+                    or not all(k in prior for k in saved["metadata_keys"])):
+                return None
+            metadata = {k: prior[k] for k in saved["metadata_keys"]}
+            metadata["sport"] = saved["original_sport"]
+            catalog_metadata[ref] = metadata
+            if classification := prior["canonical_summary"].get("sport_classification"):
+                catalog_sport_classifications[ref] = classification
+            if saved["source_hash"]:
+                scientific_input_hashes[ref] = saved["source_hash"]
+            if saved["shadow_key"]:
+                shadow_runs[ref] = saved["shadow_key"]
+            trainability[ref] = saved["index"]
+            if refresh_speed_evidence is not None:
+                refresh_speed_evidence.record(metadata, {"trainability_index": saved["index"]})
+            if saved["peak"]:
+                observed_hrmax_candidates.append(saved["peak"])
+            cache.records[ref] = {**saved, "evidence": evidence_keys.get((str(detail.get("type") or "Unknown"), day)),
+                                  "capacity": capacity if evidence_keys else None}
+            cache.reused.add(ref)
+            return detail, saved["strength"], saved["duration"], deepcopy(saved["summary"]), capacity
+
         def calculate_dataset():
             progress = getattr(repository, "report_sync_progress", None)
             return load_real_history(provider, profile_identifier=context.provider_athlete_id,
@@ -1482,6 +1566,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                                     activity_shadow_processor=process_activity_shadow,
                                     activity_ref_resolver=resolve_activity_ref,
                                     activity_metadata_collector=collect_activity_metadata,
+                                    reuse_activity=reuse_activity, remember_activity=remember_activity,
                                     progress_callback=(lambda done, total: progress("ACTIVITIES", done, total)) if callable(progress) else None,
                                     activity_detail_transformer=(
                                         lambda detail: apply_sport_rules(detail, sport_rules)
@@ -1499,6 +1584,14 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                 historical_load_contexts.clear()
                 speed_inputs = None
                 refresh_speed_evidence = None
+                cache.prior.clear()
+                evidence_keys.clear()
+                cache.records.clear()
+                cache.reused.clear()
+                trainability.clear()
+                peaks.clear()
+                observed_hrmax_candidates.clear()
+                catalog_metadata.clear()
                 dataset = calculate_dataset()
         progress = getattr(repository, "report_sync_progress", None)
         if callable(progress):
@@ -1611,12 +1704,18 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                     allow_nan=False,
                 ).encode("utf-8")
             ).hexdigest()
-            canonical_run_key = repository.publish_canonical_activity_result(
-                athlete_alias=context.public_alias,
-                activity_ref=str(activity.activity_ref),
-                scientific_input_hash=scientific_input_hash,
-                result_payload=canonical_summary,
-            )
+            ref = str(activity.activity_ref)
+            saved = cache.records.get(ref)
+            if (ref in cache.reused and saved["scientific_hash"] == scientific_input_hash
+                    and cache.prior[ref]["canonical_summary"] == canonical_summary):
+                canonical_run_key = saved["canonical_key"]
+            else:
+                canonical_run_key = repository.publish_canonical_activity_result(
+                    athlete_alias=context.public_alias,
+                    activity_ref=str(activity.activity_ref),
+                    scientific_input_hash=scientific_input_hash,
+                    result_payload=canonical_summary,
+                )
             catalog_row = {
                     **metadata,
                     "provider_activity_key": catalog_provider_key,
@@ -1635,8 +1734,15 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                 catalog_row["latest_shadow_run_key"] = shadow_runs[
                     str(activity.activity_ref)
                 ]
+            if saved is not None:
+                checkpoint = pack({**saved, "canonical_key": canonical_run_key,
+                    "shadow_key": shadow_runs.get(ref), "scientific_hash": scientific_input_hash})
+                if checkpoint:
+                    catalog_row["refresh_checkpoint"] = checkpoint
             catalog_rows.append(catalog_row)
         repository.upsert_activity_catalog(context.public_alias, catalog_rows)
+        logger.info("real_refresh_activity_reuse prior=%d reused=%d analyzed=%d",
+                    len(previous_catalog), len(cache.reused), dataset.processed_activities - len(cache.reused))
         logger.warning(
             "real_refresh_history_result processed=%d limited=%d excluded=%d",
             dataset.processed_activities,
