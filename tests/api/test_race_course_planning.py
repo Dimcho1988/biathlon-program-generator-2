@@ -53,6 +53,13 @@ def test_calendar_http_saves_and_reads_course_with_existing_envelope(monkeypatch
         _request=lambda method, path, **kwargs: [{"planning_calendar": saved["athlete"].to_payload() if "athlete" in saved else None,
                                                 "calendar_revision": version["revision"]}],
         _json=lambda value: value)
+    # A missing active snapshot must remain visible even if an older payload exists.
+    def unexpected_full_read(alias):
+        pytest.fail("The calendar should only request snapshot metadata")
+
+    repo.latest = unexpected_full_read
+    reference = {"active": None}
+    repo.latest_snapshot_reference = lambda _: reference["active"]
     from apps.api import assistant_commands
     def save_prepared(repository, alias, actor, operation_id, prepared, request_hash, **kwargs):
         assert prepared["expected_revision"] == version["revision"]
@@ -70,7 +77,10 @@ def test_calendar_http_saves_and_reads_course_with_existing_envelope(monkeypatch
     payload = {"schema_version": "planning-calendar-v1", "events": [event((date.today()+timedelta(days=10)).isoformat())]}
     response = client.put("/api/v2/athlete/planning-calendar", headers=headers, json=payload)
     assert response.status_code == 200, response.text
+    assert "TRAINING_SNAPSHOT" in response.json()["context"]["missing_inputs"]
+    reference["active"] = {"revision": 1}
     loaded = client.get("/api/v2/athlete/planning-calendar", headers=headers)
+    assert "TRAINING_SNAPSHOT" not in loaded.json()["context"]["missing_inputs"]
     assert loaded.json()["calendar"] == response.json()["calendar"] == payload
     assert loaded.json()["revision"] == 1
 

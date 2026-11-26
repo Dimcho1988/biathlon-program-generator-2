@@ -971,6 +971,12 @@ class SupabasePilotRepository(SnapshotRepository):
             raise PersistentStoreFailure("Stored training snapshot is invalid")
         return dict(snapshot)
 
+    def latest_snapshot_reference(self, athlete_alias: str) -> Mapping[str, Any] | None:
+        """Use the active pointer for presence checks; legacy reads still validate their payload."""
+        if self._generation_reads:
+            return self.active_analysis_metadata(athlete_alias)
+        return self.latest(athlete_alias)
+
     def latest_envelope(self, athlete_alias: str) -> Mapping[str, Any] | None:
         analysis = self.active_analysis(athlete_alias)
         if analysis is None:

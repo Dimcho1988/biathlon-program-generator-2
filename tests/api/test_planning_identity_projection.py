@@ -177,12 +177,13 @@ def test_invalid_saved_digest_falls_back_without_a_false_fresh_result(fingerprin
     assert repo.calls["analysis"] == 1 and repo.calls["analysis_metadata"] == 0
 
 
-def test_repository_projects_coherent_rpc_metadata_without_snapshot():
+@pytest.mark.parametrize("reader", ["active_analysis_metadata", "latest_snapshot_reference"])
+def test_repository_projects_coherent_rpc_metadata_without_snapshot(reader):
     harness = SupabaseHTTPHarness()
     metadata = {"generation_id": GENERATION_ID, "revision": 7,
                 "analysis_as_of": "2026-08-27", "activated_at": "2026-08-27T06:30:00+00:00"}
     harness.respond(rpc_path("active_onflows_analysis"), [metadata])
-    assert repository(harness).active_analysis_metadata(ALIAS) == metadata
+    assert getattr(repository(harness), reader)(ALIAS) == metadata
     assert harness.requests == [{"method": "POST", "path": rpc_path("active_onflows_analysis"),
         "query": "select=generation_id,revision,analysis_as_of,activated_at",
         "json": {"p_athlete_alias": ALIAS}, "prefer": None}]

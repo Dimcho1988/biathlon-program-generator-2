@@ -348,14 +348,14 @@ def _planning_calendar_response(
     calendar: AthletePlanningCalendar | None,
     revision: int | None = None,
 ) -> PlanningCalendarResponse:
+    read_reference = getattr(repository, "latest_snapshot_reference", repository.latest)
     context = planning_generation_context(
         calendar=calendar,
         profile=repository.athlete_planning_profile(athlete_alias),
         accent_preferences=repository.athlete_mesocycle_accent_preferences(
             athlete_alias
         ),
-        # Calendar readiness needs presence only, not a Recovery recomputation.
-        training_snapshot=repository.latest(athlete_alias),
+        training_snapshot=read_reference(athlete_alias),
         as_of=date.today(),
     )
     return PlanningCalendarResponse(
