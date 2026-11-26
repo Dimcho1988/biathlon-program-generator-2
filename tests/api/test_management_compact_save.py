@@ -128,7 +128,6 @@ def test_publication_transport_outlives_sql_budget_without_retry_or_global_timeo
 
 @pytest.mark.parametrize("operation,route,body", [
     ("activate", "activate", {"start_date": "2026-10-19", "draft_revision": 1, "expected_revision": 7}),
-    ("refresh", "day", {"date": "2026-10-19", "action": "SKIP", "expected_revision": 7}),
     ("action", "action", {"action": "REFRESH", "expected_revision": 7}),
 ])
 def test_action_route_discards_compact_ack_and_returns_fresh_current(monkeypatch, operation, route, body):

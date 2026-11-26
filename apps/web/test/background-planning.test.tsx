@@ -186,3 +186,17 @@ it('recognizes no saved request without inventing progress',()=>{
   expect(parsePlanningJob({job:null})).toBeNull();
   expect(planningPending(null)).toBe(false);
 });
+
+it('retains the visible plan while a day edit runs and opens the new revision on completion',async()=>{
+  let job:PlanningJob={...queued,kind:'DAY'};
+  const transport=vi.fn(async(url:string)=>Response.json(url.endsWith('/active')?published(5):{job}));
+  vi.stubGlobal('fetch',transport);await mount(true,[],published(4));
+  expect(container.textContent).toContain('Промяна за');
+  const plan=()=>container.querySelector('[data-plan-revision]')?.getAttribute('data-plan-revision');
+  expect(plan()).toBe('4');
+  job={...ready,kind:'DAY',result_active_revision:5};
+  await act(async()=>vi.advanceTimersByTimeAsync(5000));
+  expect(plan()).toBe('5');
+  expect(container.textContent).toContain('Изборът за деня е записан.');
+  expect(transport.mock.calls.some(([url])=>url.includes('drafts?'))).toBe(false);
+});

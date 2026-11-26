@@ -424,8 +424,12 @@ def _management_action(operation, body, authorization, athlete_alias, actor):
         if operation == "activate":
             saved = management_lifecycle.activate(repository, alias, body, actor, include_saved_payload=False)
         elif operation == "day":
-            saved = management_lifecycle.refresh(repository, alias, actor, expected_revision=body.expected_revision,
-                                         force=True, day_action=body, include_saved_payload=False)
+            from ..planning_jobs import enqueue as enqueue_job
+            receipt = enqueue_job(repository, alias, body, actor)
+            # Existing clients can retain their current schedule on a 202.
+            return Response(content=json.dumps({**receipt, "active": None, "history": [],
+                "background_update": {"status": "QUEUED"}}), status_code=202, media_type="application/json",
+                headers={"Cache-Control": "no-store", "Retry-After": "5"})
         else:
             saved = management_lifecycle.action(repository, alias, body, actor, include_saved_payload=False)
         check = saved.get("unchanged_check") if isinstance(saved, dict) else None
@@ -452,7 +456,7 @@ def management_plan_action(body: ManagementPlanAction,
     return _management_action("action", body, authorization, athlete_alias, actor)
 
 
-@router.post("/api/v2/athlete/management/day")
+@router.post("/api/v2/athlete/management/day", status_code=202)
 def management_day_action(body: ManagementDayAction,
     authorization: Annotated[str | None, Header()] = None,
     athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,

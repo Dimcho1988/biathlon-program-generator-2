@@ -2224,6 +2224,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     methods = method_registry.executable_methods(profile, speed_by_sport, legacy_methods=methods, race_reference=event_reference)
     profile["_starting_strength_doses"] = starting_strength_doses(profile, methods, settings)
     method_days = {}
+    @lru_cache(maxsize=32)
     def methods_for_day(day):
         event_profile = race_course.apply_event(original_event_profile, events, day)
         target_id = (event_profile.get("_race_event") or {}).get("event_id")
@@ -2682,18 +2683,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             preparation_q=direct["Z1"], preparation_effective=effective["Z1"])
         return planning_continuity.fits(direct, effective, headroom, components)
 
-    def candidate_catalog(d, slot=0):
-        candidates, shortage = cached_candidate_catalog(d, slot, len(result_days), tuple(key_slots))
-        return training_structure.select_candidates(list(candidates), structure_requests, d, slot), shortage
-
-    @lru_cache(maxsize=128)
-    def cached_candidate_catalog(d, slot, history_revision, key_dates):
-        """Use the same complete methods for reservations and actual selection.
-
-        Unfinished components can share a slot. Each part retains its role
-        dose and passes the same Q/E, time and Recovery checks as a standalone
-        method; no separate feasibility solver decides eligibility.
-        """
+    @lru_cache(maxsize=32)
+    def base_candidates(d):
         candidates, seen_candidates = [], set()
         day_methods = methods_for_day(d)
         registered = {(sport, m["id"]): m for m in day_methods for sport in m["sports"]}
@@ -2719,24 +2710,18 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 if identity not in seen_candidates:
                     candidates.append((sport, method))
                     seen_candidates.add(identity)
-        period, taper = _phase(periodization, d)
-        if not controls or not controls.get("mixed_sessions_enabled", True) or limited or taper:
-            return candidates, combined_methods.opportunities({}, {}, 0)
-        _, remaining_q, segment = component_budgets(forecast_rows, result_days, d)
-        deficits = ({z: row["remaining"] or 0. for z, row in segment["components"].items()}
-                    if segment else remaining_q)
-        free = [(fd, fs) for fd, fs, count in schedule if count and fs >= first_plannable_slot(fd)
-                and available[fd.weekday()] > 0 and not any(ev["event_type"] in
-                    {"UNAVAILABLE", "MAIN_RACE", "CONTROL_RACE", "TEST"}
-                    and str(ev["start_date"]) <= fd.isoformat() <= str(ev["end_date"]) for ev in events)]
-        separate = min(max(0, session_limit-session_counts(d)[0]), planning_allocation.remaining_slots(
-            free, d, slot, segment_keys=segment_keys if segment else None))
-        nominal, work_per_q, preferred_q = {}, {}, {}
+        return candidates
+
+    @lru_cache(maxsize=32)
+    def nominal_references(d):
+        """Static method doses for this day's phase, sport and athlete snapshot."""
+        period, _ = _phase(periodization, d)
         state, accents = day_goals[d][2], day_goals[d][1]
         building_zones = set(accents)
         if state and state.get("background_development"):
             building_zones.update(z for z in COMPONENTS if mesocycle_focus.growth_weight(state, z) > 0)
-        for sport, original in candidates:
+        references = []
+        for sport, original in base_candidates(d):
             if (original.get("mixed_component") or original["structure"] in method_registry.COMBINED_STRUCTURES
                 or period not in original["periods"] or original["purpose"] not in {"BUILDING", "MAINTENANCE"}):
                 continue
@@ -2753,23 +2738,70 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             work = _quantized_work(parent, min(parent["max_work_min"], cap["capacity_minutes"]*fraction*policy["dose_factor"]))
             core = _blocks(parent, work, cap, settings) if work >= parent["min_work_min"] else []
             if core:
-                q, e, _ = _candidate_load(core, settings, forecast_rows, d,
-                    technical_reference=technical_reference_for(forecast_rows, d), zone_tmax_minutes=cap.get("zone_tmax_minutes"))
-                vector = {z: q[z] if segment and segment["components"][z]["basis"] == "DIRECT_Q" else e[z] for z in COMPONENTS}
-                nominal[parent["zone"]] = max(nominal.get(parent["zone"], 0.), vector[parent["zone"]])
-                primary_work = sum(b["duration_min"] for b in core if b["kind"] == "WORK" and b["zone"] == parent["zone"])
-                if q[parent["zone"]] > 0 and primary_work > 0:
-                    work_per_q[(sport, parent["id"])] = primary_work/q[parent["zone"]]
-                    observed = volume_evidence["max_session_minutes_by_sport"].get(sport, 0.)
-                    fixed = sum(b["duration_min"] for b in core if b["kind"] in {"WARMUP", "PREPARATION", "COOLDOWN"})
-                    total = sum(b["duration_min"] for b in core)
-                    if observed > fixed and total > fixed:
-                        reference = q[parent["zone"]] * min(1., (observed-fixed)/(total-fixed))
-                        minimum = _minimum_work(parent, cap, settings)
-                        if minimum is not None:
-                            preferred_q[(sport, parent["id"])] = (minimum/work_per_q[(sport, parent["id"])], reference)
+                references.append((sport, parent, cap, core))
+        return building_zones, references
+
+    @lru_cache(maxsize=12)
+    def combination_templates(d, zones, enabled):
+        period, _ = _phase(periodization, d)
+        eligible = [(sport, m) for sport, m in base_candidates(d) if period in m["periods"]]
+        # Pair membership depends only on eligible zones. Counts, free slots and
+        # targets belong to the current forecast and are attached to each trial.
+        evidence = {"sessions_by_component": dict.fromkeys(zones, 1), "consider_combinations": enabled}
+        pairs = combined_methods.candidates(eligible, evidence)
+        for _, pair in pairs:
+            pair["method_card"] = method_registry.coach_card(pair)
+            pair["method_card"]["components"] = [copy_recipe(p.get("method_library") or p.get("method_card"))
+                                                  for p in pair["combined_methods"]]
+        return pairs
+
+    def candidate_catalog(d, slot=0):
+        candidates, shortage = cached_candidate_catalog(d, slot, len(result_days), tuple(key_slots))
+        return training_structure.select_candidates(list(candidates), structure_requests, d, slot), shortage
+
+    @lru_cache(maxsize=128)
+    def cached_candidate_catalog(d, slot, history_revision, key_dates):
+        """Use the same complete methods for reservations and actual selection.
+
+        Unfinished components can share a slot. Each part retains its role
+        dose and passes the same Q/E, time and Recovery checks as a standalone
+        method; no separate feasibility solver decides eligibility.
+        """
+        candidates = base_candidates(d)
+        period, taper = _phase(periodization, d)
+        if not controls or not controls.get("mixed_sessions_enabled", True) or limited or taper:
+            return candidates, combined_methods.opportunities({}, {}, 0)
+        _, remaining_q, segment = component_budgets(forecast_rows, result_days, d)
+        deficits = ({z: row["remaining"] or 0. for z, row in segment["components"].items()}
+                    if segment else remaining_q)
+        free = [(fd, fs) for fd, fs, count in schedule if count and fs >= first_plannable_slot(fd)
+                and available[fd.weekday()] > 0 and not any(ev["event_type"] in
+                    {"UNAVAILABLE", "MAIN_RACE", "CONTROL_RACE", "TEST"}
+                    and str(ev["start_date"]) <= fd.isoformat() <= str(ev["end_date"]) for ev in events)]
+        separate = min(max(0, session_limit-session_counts(d)[0]), planning_allocation.remaining_slots(
+            free, d, slot, segment_keys=segment_keys if segment else None))
+        nominal, work_per_q, preferred_q = {}, {}, {}
+        building_zones, references = nominal_references(d)
+        for sport, parent, cap, core in references:
+            q, e, _ = _candidate_load(core, settings, forecast_rows, d,
+                technical_reference=technical_reference_for(forecast_rows, d), zone_tmax_minutes=cap.get("zone_tmax_minutes"))
+            vector = {z: q[z] if segment and segment["components"][z]["basis"] == "DIRECT_Q" else e[z] for z in COMPONENTS}
+            nominal[parent["zone"]] = max(nominal.get(parent["zone"], 0.), vector[parent["zone"]])
+            primary_work = sum(b["duration_min"] for b in core if b["kind"] == "WORK" and b["zone"] == parent["zone"])
+            if q[parent["zone"]] > 0 and primary_work > 0:
+                work_per_q[(sport, parent["id"])] = primary_work/q[parent["zone"]]
+                observed = volume_evidence["max_session_minutes_by_sport"].get(sport, 0.)
+                fixed = sum(b["duration_min"] for b in core if b["kind"] in {"WARMUP", "PREPARATION", "COOLDOWN"})
+                total = sum(b["duration_min"] for b in core)
+                if observed > fixed and total > fixed:
+                    reference = q[parent["zone"]] * min(1., (observed-fixed)/(total-fixed))
+                    minimum = _minimum_work(parent, cap, settings)
+                    if minimum is not None:
+                        preferred_q[(sport, parent["id"])] = (minimum/work_per_q[(sport, parent["id"])], reference)
         shortage = combined_methods.opportunities(deficits, nominal, separate)
-        combos = combined_methods.candidates([(s, m) for s, m in candidates if period in m["periods"]], shortage)
+        combos = [(sport, {**_copy_method_budget(pair), "combination_shortage": copy_recipe(shortage)})
+                  for sport, pair in combination_templates(d, tuple(sorted(shortage["sessions_by_component"])),
+                                                         shortage.get("consider_combinations", len(shortage["sessions_by_component"]) > 1))]
         requested = training_structure.requested_session(structure_requests, d, slot)
         if requested and len(requested["method_ids"]) == 2:
             # A saved pair may no longer be among the generic catalogue's first
@@ -2797,8 +2829,9 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         combo["combined_work_targets"][part["zone"]] = share*work_per_q[(sport, part["id"])]
             combo["combined_work_limits"] = {p["zone"]: (planning_allocation.prescription_headroom(segment["components"][p["zone"]]) or 0.)*work_per_q[(sport, p["id"])]
                 for p in combo["combined_methods"] if p["zone"] in combo["combined_work_targets"]}
-            combo["method_card"] = method_registry.coach_card(combo)
-            combo["method_card"]["components"] = [copy_recipe(p.get("method_library") or p.get("method_card")) for p in combo["combined_methods"]]
+            if "method_card" not in combo:
+                combo["method_card"] = method_registry.coach_card(combo)
+                combo["method_card"]["components"] = [copy_recipe(p.get("method_library") or p.get("method_card")) for p in combo["combined_methods"]]
         return candidates + combos, shortage
 
     def executable_key(d, forecast_ready, future_budget, future_q, future_segment):

@@ -9,8 +9,8 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
-from . import management_service
-from .management_schemas import ManagementGenerateRequest
+from . import management_lifecycle, management_service
+from .management_schemas import ManagementDayAction, ManagementGenerateRequest
 from .oauth_store import PersistentStoreFailure, HistoricalGenerationReferenceConflict, PlanStorageCapacityExceeded
 
 logger = logging.getLogger(__name__)
@@ -23,14 +23,20 @@ def public_job(value):
             or value.get('stage') not in STAGES or not isinstance(value.get('job_id'), str)):
         raise PersistentStoreFailure('Invalid planning job state')
     fields = ('job_id', 'status', 'stage', 'start_date', 'requested_at', 'updated_at',
-              'attempts', 'result_revision', 'result_active_revision', 'published', 'error_code')
+              'kind', 'attempts', 'result_revision', 'result_active_revision', 'published', 'error_code')
     return {key: value.get(key) for key in fields}
 
 
 def enqueue(repository, alias, body, actor):
-    result = repository.planning_job('ENQUEUE', alias=alias, actor=str(actor), request=body.model_dump(mode='json'))
+    request = body.model_dump(mode='json')
+    if isinstance(body, ManagementDayAction):
+        request['kind'] = 'DAY'
+    result = repository.planning_job('ENQUEUE', alias=alias, actor=str(actor), request=request)
     if isinstance(result, dict) and result.get('conflict'):
-        raise HTTPException(409, 'Planning inputs changed or another draft is already being prepared')
+        if result.get('reason') == 'JOB_IN_PROGRESS':
+            raise HTTPException(409, 'Another planning request is already pending',
+                                headers={'X-OnFlows-Planning-Conflict': 'JOB_IN_PROGRESS'})
+        raise HTTPException(409, 'Planning inputs changed; reload before editing')
     return {'job': public_job(result)}
 
 
@@ -85,9 +91,18 @@ def process_next(repository):
     thread = Thread(target=heartbeat, name='draft-job-lease', daemon=True)
     thread.start()
     try:
-        body = ManagementGenerateRequest.model_validate(job['request'])
-        payload = management_service.build_generated_plan(repository, job['athlete_alias'], body,
-            job['actor_id'], on_progress=progress)
+        request = job['request']
+        if request.get('kind') == 'DAY':
+            day = ManagementDayAction.model_validate({k: v for k, v in request.items() if k != 'kind'})
+            payload = management_lifecycle.refresh(repository, job['athlete_alias'], job['actor_id'],
+                expected_revision=day.expected_revision, day_action=day, force=True,
+                prepare_day_publication=True, on_progress=progress)
+            if payload is None:
+                raise HTTPException(409, 'The active plan is no longer available')
+        else:
+            body = ManagementGenerateRequest.model_validate(request)
+            payload = management_service.build_generated_plan(repository, job['athlete_alias'], body,
+                job['actor_id'], on_progress=progress)
         if lost.is_set():
             raise HTTPException(409, 'Planning job ownership changed')
         renew('SAVING')

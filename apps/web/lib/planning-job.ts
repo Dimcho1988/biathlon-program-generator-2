@@ -2,6 +2,7 @@ import { isCalendarDate, isRecord } from './training-status';
 
 export type PlanningJob = {
   job_id: string;
+  kind?: "DAY" | "GENERATE" | null;
   status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED';
   stage: 'QUEUED' | 'PREPARING' | 'BASELINE' | 'SEARCH' | 'SAVING' | 'READY' | 'FAILED';
   start_date: string;
@@ -18,11 +19,12 @@ export function parsePlanningJob(value: unknown): PlanningJob | null {
     || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(job.job_id)
     || !['QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED'].includes(String(job.status))
     || !['QUEUED', 'PREPARING', 'BASELINE', 'SEARCH', 'SAVING', 'READY', 'FAILED'].includes(String(job.stage))
+    || job.kind != null && job.kind !== 'DAY' && job.kind !== 'GENERATE'
     || !isCalendarDate(job.start_date)
     || !(job.result_revision === null || Number.isSafeInteger(job.result_revision) && Number(job.result_revision) > 0)
     || !(job.result_active_revision === undefined || job.result_active_revision === null || Number.isSafeInteger(job.result_active_revision) && Number(job.result_active_revision) > 0)
     || !(job.error_code === null || typeof job.error_code === 'string')
-    || job.status === 'SUCCEEDED' && job.result_revision === null) throw new Error('Невалидно състояние на подготовката.');
+    || job.status === 'SUCCEEDED' && (job.result_revision === null || job.kind === 'DAY' && !job.result_active_revision)) throw new Error('Невалидно състояние на подготовката.');
   return job as PlanningJob;
 }
 
@@ -44,5 +46,7 @@ const FAILURES: Record<string, string> = {
   RETRIES_EXHAUSTED: 'Подготовката беше прекъсната няколко пъти. Опитай отново по-късно.',
   COMPUTATION_FAILED: 'Техническа грешка при изчисляването или записването на програмата. Нужна е техническа проверка на резултата.',
 };
-export const planningFailure = (job: PlanningJob) => FAILURES[job.error_code ?? '']
+export const planningFailure = (job: PlanningJob) => job.kind === 'DAY' && job.error_code === 'INPUT_CHANGED'
+  ? 'Данните за плана се промениха. Прегледай актуалната програма и избери отново действието за деня.'
+  : FAILURES[job.error_code ?? '']
   ?? 'Подготовката не завърши. Опитай отново или обнови входните данни.';

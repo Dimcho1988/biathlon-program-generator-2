@@ -1,3 +1,4 @@
+import { parsePlanningJob } from "./planning-job";
 import { parseActivePlanResponse, type ActivePlanResponse } from "./training-management";
 import { isRecord } from "./training-status";
 
@@ -16,11 +17,15 @@ export async function changeActivePlan(endpoint: string, body: Record<string, un
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
   if (response.status === 409) {
+    const conflict = await response.json().catch(() => null);
+    if (isRecord(conflict) && conflict.code === "JOB_IN_PROGRESS" && typeof conflict.error === "string")
+      throw new Error(conflict.error);
     const latest = await request("/api/athlete/management/active", { cache: "no-store", signal: AbortSignal.timeout(75_000) });
     if (!latest.ok) throw new Error("Програмата е променена, но последната версия не се зареди. Презареди страницата преди следващо действие.");
     return { value: parseActivePlanResponse(await latest.json()), conflict: true };
   }
   const result: unknown = await response.json();
   if (!response.ok) throw new Error(isRecord(result) && typeof result.error === "string" ? result.error : "Програмата не беше променена.");
-  return { value: parseActivePlanResponse(result), conflict: false };
+  const job = endpoint === "day" && isRecord(result) && Object.hasOwn(result, "job") ? parsePlanningJob(result) : null;
+  return { value: parseActivePlanResponse(result), conflict: false, job };
 }

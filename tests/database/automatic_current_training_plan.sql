@@ -213,3 +213,6 @@ end $$;
 reset role;
 set constraints all immediate;
 rollback;
+
+-- Exercise the second publication type on the same durable queue.
+\ir queued_day_edits.sql

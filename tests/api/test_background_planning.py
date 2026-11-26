@@ -65,10 +65,10 @@ def test_enqueue_conflict_and_unknown_job_do_not_calculate():
 
 
 class WorkerRepository:
-    def __init__(self):self.calls=[];self.lost=False
+    def __init__(self, request=None):self.calls=[];self.lost=False;self.request=request or BODY
     def planning_job(self,operation,**arguments):
         self.calls.append((operation,deepcopy(arguments)))
-        if operation=='CLAIM':return {'job_id':JOB,'athlete_alias':'ath-job','actor_id':ACTOR,'request':BODY}
+        if operation=='CLAIM':return {'job_id':JOB,'athlete_alias':'ath-job','actor_id':ACTOR,'request':self.request}
         if operation=='RENEW':return {'state':'LOST'} if self.lost else {'status':'RUNNING'}
         if operation=='COMPLETE':return {**STATE,'status':'SUCCEEDED'}
         return {'status':'FAILED'}
@@ -176,3 +176,33 @@ def test_dashboard_preparation_gets_a_turn_even_with_a_busy_generation_queue():
     worker.join(timeout=2)
     assert not worker.is_alive()
     assert calls == ['job', 'dashboard']
+
+
+def test_day_endpoint_accepts_without_replanning(monkeypatch):
+    calls = []
+    def rpc(operation, **arguments):
+        calls.append((operation, arguments))
+        return {**STATE, 'kind': 'DAY'}
+    monkeypatch.setenv('ONFLOWS_SERVICE_TOKEN', 'test-background')
+    monkeypatch.setattr(dependencies, 'repository', lambda: SimpleNamespace(planning_job=rpc))
+    monkeypatch.setattr(planning_jobs.management_lifecycle, 'refresh', lambda *a, **k: pytest.fail('HTTP recalculated the plan'))
+    body = {'date': '2026-11-02', 'action': 'REST', 'note': '', 'expected_revision': 4}
+    result = TestClient(main.app).post(URL.replace('generation-jobs', 'day'), headers=HEADERS, json=body)
+    assert result.status_code == 202 and result.json()['job']['kind'] == 'DAY'
+    assert calls == [('ENQUEUE', {'alias': 'ath-job', 'actor': ACTOR, 'request': {**body, 'kind': 'DAY'}})]
+
+
+def test_day_worker_checks_the_revision_and_lease_before_publishing(monkeypatch):
+    repository = WorkerRepository({'kind': 'DAY', 'date': '2026-11-02', 'action': 'SKIP', 'expected_revision': 4})
+    publication = {'day_plan': {'status': 'ACTIVE'}, 'operation': 'DAY', 'profile_revision': 2, 'checkpoint': {}}
+    def prepare(repo, alias, actor, *, expected_revision, day_action, force, prepare_day_publication, on_progress):
+        assert (repo, alias, actor) == (repository, 'ath-job', ACTOR)
+        assert expected_revision == day_action.expected_revision == 4 and day_action.action == 'SKIP'
+        assert force and prepare_day_publication
+        on_progress('BASELINE')
+        return publication
+    monkeypatch.setattr(planning_jobs.management_lifecycle, 'refresh', prepare)
+    assert planning_jobs.process_next(repository)
+    assert [op for op, _ in repository.calls] == ['CLAIM', 'RENEW', 'RENEW', 'COMPLETE']
+    assert repository.calls[-1][1]['payload'] == publication
+    assert len({args['token'] for _, args in repository.calls}) == 1

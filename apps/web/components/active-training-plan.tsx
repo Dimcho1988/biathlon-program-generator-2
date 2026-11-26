@@ -1,4 +1,5 @@
 "use client";
+import type { PlanningJob } from "../lib/planning-job";
 import { useManagementFetch } from "./management-scope";
 
 import { SymptomNotice } from "./symptom-notice";
@@ -18,9 +19,10 @@ import { activeScheduleView, planRangeLabel, selectedScheduleWindow } from "../l
 const STATE: Record<string, string> = { ACTIVE: "Активна програма", PAUSED: "Програмата е на пауза", REVIEW_REQUIRED: "Промяна за преглед", COMPLETED: "Завършена програма" };
 const OUTCOME: Record<string, string> = { RECORDED: "Има реално изпълнение", DIFFERENT_ACTIVITY: "Изпълнено е друго средство", MISSED: "Без изпълнена сесия", SKIPPED: "Пропусната", REST: "Почивка", UNKNOWN: "Липсват данни" };
 
-export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay, externalBusy = false, onBegin, onEnd, profile, selectedWeek, showProposal = false }: {
+export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay, externalBusy = false, onBegin, onEnd, onDayJob, profile, selectedWeek, showProposal = false }: {
   value: ActivePlanResponse; onChange: (v: ActivePlanResponse) => void; canEdit: boolean; today: string;
   profile?: ManagementProfileResponse;
+  onDayJob?: (job: PlanningJob) => void;
   externalBusy?: boolean; onBegin?: () => boolean; onEnd?: () => void;
   renderDay: (day: DraftDay) => ReactNode;
   selectedWeek?: string; showProposal?: boolean;
@@ -62,6 +64,10 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
       const recordCheck = endpoint === "action" && body.action === "REFRESH" && value.capabilities?.unchanged_checks === true;
       const result = await changeActivePlan(endpoint, { ...body, expected_revision: record!.revision,
         ...(recordCheck ? { record_unchanged_check: true } : {}) }, scopedFetch);
+      if (result.job && onDayJob) {
+        onDayJob(result.job);
+        return;
+      }
       const { action_result: receipt, ...current } = result.value;
       onChange(current);
       if (current.background_update?.status === "QUEUED" || current.background_update?.status === "RUNNING")

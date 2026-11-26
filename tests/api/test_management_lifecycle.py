@@ -174,7 +174,11 @@ def test_skip_does_not_invent_activity_and_stale_revision_conflicts(system):
     before = deepcopy(system.repo.envelope)
     day = TODAY+timedelta(days=1)
     request = ManagementDayAction(date=day, action="SKIP", expected_revision=1)
+    staged = lifecycle.refresh(system.repo, "athlete", ACTOR, expected_revision=1, now=NOW, day_action=request,
+                               prepare_day_publication=True)
+    assert staged["operation"] == "DAY" and staged["profile_revision"] == 1
     updated = lifecycle.refresh(system.repo, "athlete", ACTOR, expected_revision=1, now=NOW, day_action=request)
+    assert staged["day_plan"] == updated["payload"]
     skipped = next(d for d in updated["payload"]["plan"]["days"] if d["date"] == day.isoformat())
     assert skipped["status"] == "SKIPPED" and skipped["session"] is None
     assert system.repo.envelope == before

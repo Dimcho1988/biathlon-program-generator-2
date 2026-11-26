@@ -292,10 +292,15 @@ class SupabasePilotRepository(SnapshotRepository):
     """Minimal PostgREST client using a server-only Supabase secret key."""
 
     def planning_job(self, operation, **arguments):
+        request_options = {}
         if operation == 'COMPLETE' and 'payload' in arguments:
             from .plan_storage import pack
             payload = arguments['payload']
-            if isinstance(payload, dict) and 'draft' in payload:
+            if isinstance(payload, dict) and 'day_plan' in payload:
+                # Match the active plan writer's deadline on large weekly plans.
+                request_options['timeout'] = httpx.Timeout(35.0, connect=5.0)
+                payload = {**payload, 'day_plan': pack(payload['day_plan'])}
+            elif isinstance(payload, dict) and 'draft' in payload:
                 publication = payload.get('publication')
                 payload = {**payload, 'draft': pack(payload['draft']),
                     'publication': ({**publication, 'payload': pack(publication['payload'])}
@@ -304,7 +309,7 @@ class SupabasePilotRepository(SnapshotRepository):
                 payload = pack(payload)
             arguments = {**arguments, 'payload': payload}
         value = self._json(self._request('POST', '/rpc/onflows_planning_job',
-            json={'p_operation': operation, **{'p_'+key: value for key, value in arguments.items()}}))
+            json={'p_operation': operation, **{'p_'+key: value for key, value in arguments.items()}}, **request_options))
         if value is not None and not isinstance(value, dict):
             raise PersistentStoreFailure('Invalid planning job response')
         return value
