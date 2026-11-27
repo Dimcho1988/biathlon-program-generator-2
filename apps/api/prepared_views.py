@@ -223,14 +223,15 @@ def calculate(repository, alias, kind, parameters, *, day=None):
         _worker_repository.reset(token)
 
 
-def process_next(repository):
+def process_next(repository, *, demand=None):
     """Claim one bounded view, with the same lease and memory lane as planning."""
     from .memory_budget import MODEL_WORK
     from .prepared_models import _lease
     operation = repository.prepared_view
     key, token = model_key(), str(uuid4())
     with MODEL_WORK:
-        claim = operation("CLAIM", token=token, model_key=key)
+        claim_operation = {None: "CLAIM", True: "CLAIM_REQUESTED", False: "CLAIM_BACKGROUND"}[demand]
+        claim = operation(claim_operation, token=token, model_key=key)
         if claim is None:
             return False
         if (not isinstance(claim, dict) or not isinstance(claim.get("athlete_alias"), str)

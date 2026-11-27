@@ -257,18 +257,19 @@ def test_worker_context_does_not_leak_after_failed_computation(monkeypatch):
     assert prepared_views.worker_repository() is None
 
 
-def test_publication_only_uses_the_owned_claim(monkeypatch):
+@pytest.mark.parametrize('demand,claim_operation', [(None, 'CLAIM'), (True, 'CLAIM_REQUESTED'), (False, 'CLAIM_BACKGROUND')])
+def test_publication_only_uses_the_owned_claim(monkeypatch, demand, claim_operation):
     calls=[]
     def operation(op,**kw):
         calls.append((op,kw))
-        if op=="CLAIM": return {"athlete_alias":"ath-prepared","kind":"speed","parameters":{},"revision":4,"day":"2026-11-06"}
+        if op==claim_operation: return {"athlete_alias":"ath-prepared","kind":"speed","parameters":{},"revision":4,"day":"2026-11-06"}
         if op=="STORE": return {"stored":True}
         return {"state":"RUNNING"}
     repo=SimpleNamespace(prepared_view=operation)
     calculate=Mock(return_value={"values":[12.345]})
     monkeypatch.setattr(prepared_views,"calculate",calculate)
-    assert prepared_views.process_next(repo)
-    assert [op for op,_ in calls]==["CLAIM","STORE"]
+    assert prepared_views.process_next(repo, demand=demand)
+    assert [op for op,_ in calls]==[claim_operation,"STORE"]
     assert calls[0][1]["token"]==calls[1][1]["token"]
     assert calls[1][1]["revision"]==4 and calls[1][1]["payload"]=={"values":[12.345]}
 

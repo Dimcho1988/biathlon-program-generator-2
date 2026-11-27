@@ -8,6 +8,13 @@ declare
   prune record;
   denied_role text;
 begin
+  assert (select 'statement_timeout=30s'=any(proconfig) from pg_proc where oid=
+    'public.stage_onflows_analysis_generation(uuid,uuid,uuid,jsonb,text,date,date,date,jsonb,jsonb,boolean)'::regprocedure),
+    'Background staging lost its bounded bulk-write budget';
+  assert not has_function_privilege('anon',
+    'public.stage_onflows_analysis_generation(uuid,uuid,uuid,jsonb,text,date,date,date,jsonb,jsonb,boolean)','EXECUTE');
+  assert not has_function_privilege('authenticated',
+    'public.stage_onflows_analysis_generation(uuid,uuid,uuid,jsonb,text,date,date,date,jsonb,jsonb,boolean)','EXECUTE');
   if not has_table_privilege('service_role', 'public.onflows_analysis_generations', 'SELECT') then
     raise exception 'Generation reads must remain available';
   end if;

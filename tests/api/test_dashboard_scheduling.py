@@ -180,3 +180,114 @@ def test_failed_queue_is_not_retried_inside_batch_but_other_pages_drain():
     assert background_planning.prepare_pending(SimpleNamespace(
         process_next_prepared_learning=broken, process_next_prepared_view=page), Event()) == 3
     assert calls == ["broken"]
+
+
+@pytest.fixture
+def view_lanes(monkeypatch):
+    from apps.api import prepared_views
+    def process(repo, *, demand):
+        return (repo.process_next_requested_view if demand else repo.process_next_background_view)()
+    monkeypatch.setattr(prepared_views, 'process_next', process)
+    def repository(**kwargs):
+        return SimpleNamespace(prepared_view=lambda *a, **kw: pytest.fail('Unexpected direct RPC'), **kwargs)
+    return repository
+
+
+@pytest.mark.parametrize('automatic', [False, True])
+def test_requested_pages_and_one_background_page_precede_waiting_plan(automatic, view_lanes):
+    stopping = Event()
+    calls = []
+    requested = ['opened-speed', 'opened-programme']
+    def urgent():
+        if requested:
+            calls.append(requested.pop(0))
+            return True
+        return False
+    def background():
+        calls.append('background')
+        return True
+    def plan():
+        calls.append('plan')
+        stopping.set()
+        return True
+    repo = view_lanes(process_next_requested_view=urgent,
+        process_next_background_view=background,
+        process_next_prepared_view=lambda: pytest.fail('Bulk prewarming delayed a waiting plan'),
+        process_next_planning_job=(lambda: False) if automatic else plan,
+        refresh_due_training_plans=plan)
+    worker = background_planning.start(repo, stopping)
+    worker.join(2)
+    assert not worker.is_alive()
+    assert calls == ['opened-speed', 'opened-programme', 'background', 'plan']
+
+
+def test_idle_planning_lane_drains_background_without_one_page_throttle(view_lanes):
+    stopping = Event()
+    calls = []
+    def bulk():
+        calls.append('bulk')
+        if calls.count('bulk') == 4:
+            stopping.set()
+        return True
+    repo = view_lanes(process_next_requested_view=lambda: False,
+        process_next_background_view=lambda: (calls.append('background'), True)[1],
+        process_next_prepared_view=bulk,
+        process_next_planning_job=lambda: (calls.append('plan-check'), False)[1],
+        refresh_due_training_plans=lambda: False)
+    worker = background_planning.start(repo, stopping)
+    worker.join(2)
+    assert not worker.is_alive()
+    assert calls == ['background', 'plan-check', 'bulk', 'bulk', 'bulk', 'bulk']
+
+
+def test_continuous_demand_reserves_background_turn_and_bounds_planning_delay(view_lanes):
+    calls = []
+    repo = view_lanes(
+        process_next_requested_view=lambda: (calls.append('requested'), True)[1],
+        process_next_background_view=lambda: (calls.append('background'), True)[1])
+    assert background_planning.prepare_pending(repo, Event(), requested_first=True) == background_planning.PREPARATION_JOBS
+    assert calls == ['requested'] * (background_planning.PREPARATION_JOBS-1) + ['background']
+
+
+def test_requested_time_budget_does_not_start_extra_prewarming(monkeypatch, view_lanes):
+    clock = [0.]
+    monkeypatch.setattr(background_planning, 'monotonic', lambda: clock[0])
+    def slow():
+        clock[0] += 130.
+        return True
+    repo = view_lanes(process_next_requested_view=slow,
+        process_next_background_view=lambda: pytest.fail('Exceeded soft time budget'))
+    assert background_planning.prepare_pending(repo, Event(), requested_first=True) == 1
+
+
+def test_empty_background_lane_does_not_waste_requested_capacity(view_lanes):
+    requested = []
+    repo = view_lanes(
+        process_next_requested_view=lambda: (requested.append(1), True)[1],
+        process_next_background_view=lambda: False)
+    assert background_planning.prepare_pending(repo, Event(), requested_first=True) == background_planning.PREPARATION_JOBS
+    assert len(requested) == background_planning.PREPARATION_JOBS
+
+
+def test_plan_arriving_during_idle_batch_does_not_wait_through_another_batch(monkeypatch, view_lanes):
+    monkeypatch.setattr(background_planning, 'PREPARATION_JOBS', 3)
+    stopping = Event()
+    calls = []
+    def urgent():
+        assert 'bulk' not in calls, 'A second preparation batch delayed an arriving plan'
+        calls.append('requested')
+        return False
+    def plan():
+        calls.append('plan-check')
+        if 'bulk' in calls:
+            stopping.set()
+            return True
+        return False
+    repo = view_lanes(process_next_requested_view=urgent,
+        process_next_background_view=lambda: False,
+        process_next_prepared_view=lambda: (calls.append('bulk'), True)[1],
+        process_next_planning_job=plan, refresh_due_training_plans=lambda: False)
+    worker = background_planning.start(repo, stopping)
+    worker.join(2)
+    assert not worker.is_alive()
+    assert calls == ['requested', 'plan-check', 'bulk', 'bulk', 'bulk', 'plan-check']

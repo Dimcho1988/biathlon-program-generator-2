@@ -51,6 +51,26 @@ begin
  assert not (select prosecdef from pg_proc where oid='public.onflows_prepared_view(text,text,text,jsonb,uuid,bigint,date,text,jsonb)'::regprocedure);
  delete from public.onflows_analysis_generation_activities where athlete_alias=a;
  delete from onflows_private.prepared_views where athlete_alias=a;
+ -- Prewarming cannot enter the requested-only lane. READ/STATUS establish
+ -- demand, and both lanes share the same lease and cooldown fences.
+ perform onflows_private.seed_prepared_views(a);
+ assert public.onflows_prepared_view('CLAIM_REQUESTED',p_alias=>a,p_token=>token,p_model_key=>key1) is null,
+  'Unopened page entered the requested lane';
+ perform public.onflows_prepared_view('READ',a,'trainability',p_model_key=>key1);
+ claim:=public.onflows_prepared_view('CLAIM_REQUESTED',p_alias=>a,p_token=>token,p_model_key=>key1);
+ assert claim->>'kind'='trainability', 'Requested page did not receive priority';
+ assert public.onflows_prepared_view('CLAIM_REQUESTED',p_alias=>a,p_token=>gen_random_uuid(),p_model_key=>key1) is null,
+  'A second worker claimed an owned requested page';
+ state:=public.onflows_prepared_view('CLAIM_BACKGROUND',p_alias=>a,p_token=>gen_random_uuid(),p_model_key=>key1);
+ assert state is not null and state->>'kind'<>'trainability', 'Background lane stole a requested page';
+ perform public.onflows_prepared_view('FAIL',a,'trainability','{}',token);
+ assert public.onflows_prepared_view('CLAIM_REQUESTED',p_alias=>a,p_token=>gen_random_uuid(),p_model_key=>key1) is null,
+  'Requested lane bypassed retry cooldown';
+ update onflows_private.prepared_views set available_at=clock_timestamp()-interval '1 second',
+  last_requested_at=clock_timestamp()-interval '6 minutes' where athlete_alias=a and kind='trainability';
+ assert public.onflows_prepared_view('CLAIM_REQUESTED',p_alias=>a,p_token=>token,p_model_key=>key1) is null,
+  'Expired demand retained requested priority';
+ delete from onflows_private.prepared_views where athlete_alias=a;
  state:=public.onflows_prepared_view('READ',a,'trainability',p_model_key=>key1);
  assert public.onflows_prepared_view('STATUS',a,'trainability',p_model_key=>key1)->>'ready'=state->>'ready','Status differs from READ';
  assert not (public.onflows_prepared_view('STATUS',a,'trainability',p_model_key=>key1) ? 'payload'),'Status exposed saved evidence';
