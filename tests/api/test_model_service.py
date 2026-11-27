@@ -43,7 +43,7 @@ def source():
     return {"load_history":{"period_start":rows[-1]["date"],"period_end":NOW.date().isoformat(),"daily":rows,"activities":activities},
         "training_status":{"zones":[{"zone":z} for z in ("Z1","Z2","Z3","Z4","Z5")]}}
 
-def test_projection_is_causal_uses_e_and_does_not_mutate_source(monkeypatch):
+def test_projection_is_causal_uses_q_and_does_not_mutate_source(monkeypatch):
     monkeypatch.setenv("ONFLOWS_RECOVERY_V2_ENABLED","true")
     monkeypatch.setattr(m,"speed_view",lambda *args,**kwargs:{"status":"UNAVAILABLE","sport":"Run"})
     original=source();copy=deepcopy(original)
@@ -51,14 +51,16 @@ def test_projection_is_causal_uses_e_and_does_not_mutate_source(monkeypatch):
     h=projected["recovery_history"]
     assert original==copy
     assert h["schema_version"]=="recovery-history-v2" and h["ready_threshold_percent"]==90
-    assert h["model"]["algorithm_version"]=="recovery-daily-e-biexponential-v2.3"
-    assert h["current"][1]["baseline_daily_min"]==168  # 20 base + 148 weighted daily E
-    assert h["current"][1]["baseline_raw_daily_min"]==148
+    assert h["model"]["algorithm_version"]=="recovery-capacity-biexponential-v2.4"
+    assert h["current"][1]["baseline_daily_min"]==20  # direct Q mean; no E cascade or additive base
+    assert h["current"][1]["recovery_basis"] == "CAPACITY_Q"
+    assert h["current"][1]["baseline_raw_daily_min"]==20
     assert h["current"][1]["days_to_practical_recovery"]>1.5
     assert h["current"][1]["readiness_percent"]==projected["training_status"]["zones"][1]["recovery_readiness_percent"]
     assert all(1 <= row["shape_used"] <= 5 for row in h["daily"])
     assert "comparison" not in h
-    daily=[{k:row[k] for k in ("date","zone","effective_load")} for row in h["daily"]]
+    daily=[{k:row[k] for k in ("date","zone","effective_load","direct_load","depletion_fraction","capacity_estimated")
+            if row.get(k) is not None} for row in h["daily"]]
     planning=m.recovery_v2.simulate(daily,h["settings"],target=NOW.date(),include_details=False)
     assert planning["current"]==h["current"]
     cfg={"expected_revision":2,"zones":initial_settings()}
@@ -69,8 +71,8 @@ def test_projection_is_causal_uses_e_and_does_not_mutate_source(monkeypatch):
     cfg["zones"]["Z2"]["duration_coefficient"]=1
     cfg["zones"]["Z2"]["initial_daily_min"]=40
     with_base=m.project_recovery(Store(),"ath-test",original,now=NOW,config=cfg)
-    assert with_base["recovery_history"]["current"][1]["baseline_daily_min"]==188
-    assert with_base["recovery_history"]["current"][1]["days_to_practical_recovery"]<h["current"][1]["days_to_practical_recovery"]
+    assert with_base["recovery_history"]["current"][1]["baseline_daily_min"]==20
+    assert with_base["recovery_history"]["daily"][-4]["isolated_days_to_90"]==h["daily"][-4]["isolated_days_to_90"]
     assert with_base["recovery_history"]["model"]["parameter_fingerprint"]!=h["model"]["parameter_fingerprint"]
     assert with_base["load_history"]==projected["load_history"]
     assert [[z["equivalent_time_min"] for z in a["zones"]] for a in with_base["load_history"]["activities"]]==[

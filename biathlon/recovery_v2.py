@@ -1,8 +1,9 @@
-"""Causal daily E recovery, independent of the bounded Tref denominator.
+"""Causal capacity/Q recovery, independent of the bounded Tref denominator.
 
 Each day's dose has its own immutable decay rates. The two exponential terms
 allow curve shape to change while preserving material doses' time to 90%
-readiness. E already includes cascade/spillover; never apply them again here.
+readiness. Z1–Z5 use segment exhaustion and direct Q; legacy E/STR retain
+their original policy. Cascade/spillover are not applied to capacity exhaustion.
 This is an expert model, not a validated physiological recovery measurement.
 """
 from __future__ import annotations
@@ -12,7 +13,9 @@ from collections import deque
 from datetime import date, timedelta
 import math
 
-VERSION = "recovery-daily-e-biexponential-v2.3"
+from .recovery_capacity import multiplier
+
+VERSION = "recovery-capacity-biexponential-v2.4"
 ZONES = ("Z1", "Z2", "Z3", "Z4", "Z5", "STR")
 INITIAL_DAILY = dict(zip(ZONES, (40., 20., 8., 4., 2., 8.)))
 SENSITIVITY = dict(zip(ZONES, (.55, .70, .88, 1., 1.12, .95)))
@@ -32,14 +35,11 @@ def defaults():
             for z in ZONES}
 
 
-def baseline(previous, base_daily):
-    """Permanent expert addition plus the preceding covered-day mean of E.
+def baseline(previous, base_daily, *, capacity=False):
+    """Capacity mode uses mean Q; only a missing/zero mean uses the expert base.
 
-    Only explicitly covered, completed days enter the mean; zero is a real
-    rest day. The base is added exactly once even with no or sparse history.
-    Coverage flags describe the history, without changing this denominator.
-    The stored `initial_daily_min` setting now supplies the permanent addition;
-    it never creates effective load or an initial fatigue impulse.
+    Legacy E/STR retain the permanent addition. Zero is a covered rest day;
+    unknown dates never enter either denominator.
     """
     values = [number(v, "history") for v in previous]
     base_daily = number(base_daily, "base daily addition", positive=True)
@@ -49,7 +49,7 @@ def baseline(previous, base_daily):
         return base_daily, raw, n, "NO_HISTORY" if not n else "NO_ZONE_LOAD"
     source = ("SHORT_HISTORY" if n < 7 else
               "SPARSE_ZONE_HISTORY" if math.fsum(values) < 7. * base_daily else "PERSONAL")
-    return base_daily + raw, raw, n, source
+    return (raw if capacity else base_daily + raw), raw, n, source
 
 
 @dataclass(frozen=True)
@@ -72,7 +72,9 @@ def duration_shape(nominal_days):
     return 1. + 4. * max(0., min(1., (days - 2.) / 5.))
 
 
-def impulse(day, effective, daily_baseline, config):
+def impulse(day, effective, daily_baseline, config, *, depletion=None):
+    if depletion is not None:
+        depletion = number(depletion, "depletion")
     dose = number(effective, "effective load") / number(daily_baseline, "daily baseline", positive=True)
     coefficient = number(config["duration_coefficient"], "duration coefficient", positive=True)
     # Retain validation of the legacy setting for stored-profile compatibility.
@@ -82,11 +84,13 @@ def impulse(day, effective, daily_baseline, config):
         raise ValueError("Shape must be between 1 and 10")
     if dose == 0:
         return None
-    days = coefficient * dose
+    days = coefficient * dose * (multiplier(depletion) if depletion is not None else 1.)
     shape = duration_shape(days)
     # Cap one daily impulse at 100 percentage points, not the total fatigue.
     # Larger doses still extend their decay horizon through `days`.
-    amplitude = min(100., 100. * sensitivity * dose)
+    amplitude = min(100., 100. * (depletion if depletion is not None else sensitivity * dose))
+    if amplitude == 0:
+        return None
     # Small impulses can already satisfy the absolute 90% readiness threshold;
     # they still persist and sum with previous fatigue. Never reset to 0% ready.
     # Near the readiness threshold, solving F(D)=10 without a decay floor
@@ -153,7 +157,12 @@ def simulate(daily, configs=None, *, target=None, include_details=True, include_
         day = date.fromisoformat(row["date"])
         if day in grouped[z]:
             raise ValueError("Duplicate daily recovery dose")
-        grouped[z][day] = number(row["effective_load"], "effective load")
+        effective = number(row["effective_load"], "effective load")
+        capacity = z != "STR" and "direct_load" in row and "depletion_fraction" in row
+        grouped[z][day] = (effective,
+            number(row["direct_load"], "direct Q") if capacity else effective,
+            number(row["depletion_fraction"], "depletion") if capacity else None,
+            bool(row.get("capacity_estimated", False)))
     all_days = sorted({d for days in grouped.values() for d in days})
     target = target or (all_days[-1] if all_days else date.today())
     rows, current, forecast = [], [], []
@@ -192,17 +201,19 @@ def simulate(daily, configs=None, *, target=None, include_details=True, include_
                     last_baseline = saved[2]
                     prefix_length = count
                     break
-        for position, (day, effective) in enumerate(causal_doses[prefix_length:], prefix_length+1):
+        for position, (day, payload) in enumerate(causal_doses[prefix_length:], prefix_length+1):
+            effective, load, depletion, estimated = payload
+            capacity = depletion is not None
             cutoff = day-timedelta(days=40)
             while previous_window and previous_window[0][0] < cutoff:
                 previous_window.popleft()
-            previous = tuple(v for _, v in previous_window)
-            used, raw, n, source = reuse("baseline", (previous, type(config["initial_daily_min"]), config["initial_daily_min"]),
-                lambda: baseline(previous, config["initial_daily_min"]))
+            previous = tuple(v for _, v, mode in previous_window if mode == capacity or v == 0)
+            used, raw, n, source = reuse("baseline", (previous, capacity, type(config["initial_daily_min"]), config["initial_daily_min"]),
+                lambda: baseline(previous, config["initial_daily_min"], capacity=capacity))
             before = residual(impulses, day) if include_details else None
-            impulse_key = (day, effective, used, tuple((type(config[k]), config[k]) for k in ("duration_coefficient", "shape", "sensitivity")))
-            added = reuse("impulse", impulse_key, lambda: impulse(day, effective, used, config))
-            previous_window.append((day, effective))
+            impulse_key = (day, load, depletion, used, tuple((type(config[k]), config[k]) for k in ("duration_coefficient", "shape", "sensitivity")))
+            added = reuse("impulse", impulse_key, lambda: impulse(day, load, used, config, depletion=depletion))
+            previous_window.append((day, load, capacity))
             if added:
                 impulses.append(added)
             if include_details:
@@ -214,7 +225,12 @@ def simulate(daily, configs=None, *, target=None, include_details=True, include_
                     "effective_load":effective, "baseline_daily_min":used,
                     "baseline_raw_daily_min":raw, "history_days":n, "baseline_source":source,
                     "isolated_days_to_90":days_to_ready([added],day) if added else 0.,
-                    "shape_used":added.shape if added else 1.})
+                    "shape_used":added.shape if added else 1.,
+                    "recovery_basis": "CAPACITY_Q" if capacity else "LEGACY_E",
+                    "direct_load": load if capacity else None,
+                    "depletion_fraction": depletion,
+                    "capacity_estimated": estimated,
+                    "exhaustion_multiplier": multiplier(depletion) if capacity else None})
                 contributions.append((rows[-1], added))
             last_baseline = used, raw, n, source
             if prefix_cache is not None:
@@ -232,7 +248,8 @@ def simulate(daily, configs=None, *, target=None, include_details=True, include_
         current.append({"zone":z, "readiness_percent":max(0.,100.-f),
             "residual_fatigue":f, "days_to_practical_recovery":horizon,
             "baseline_daily_min":last_baseline[0], "baseline_raw_daily_min":last_baseline[1],
-            "history_days":last_baseline[2], "baseline_source":last_baseline[3]})
+            "history_days":last_baseline[2], "baseline_source":last_baseline[3],
+            "recovery_basis": "CAPACITY_Q" if causal_doses and causal_doses[-1][1][2] is not None else "LEGACY_E"})
         if current_cache is not None:
             if len(current_cache) >= 2048:
                 current_cache.pop(next(iter(current_cache)))

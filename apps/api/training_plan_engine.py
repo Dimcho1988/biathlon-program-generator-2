@@ -5,6 +5,7 @@ Capacity (speed-duration / expert continuous Tmax) is explicitly separate from
 historical C40 and the technical denominator used by canonical E spillover.
 """
 from __future__ import annotations
+from biathlon import recovery_capacity
 
 from copy import deepcopy
 from dataclasses import dataclass
@@ -215,10 +216,7 @@ def _working_band(settings, zone):
 
 
 def _daily_rows(source, today):
-    rows = [{"date": r["date"], "zone": r["zone"], "effective_load": r["effective_load"]}
-            for r in source.get("daily", []) if r["date"] <= today.isoformat()]
-    rows += [{"date": r["date"], "zone": "STR", "effective_load": r["effective_load"]}
-             for r in (source.get("strength") or {}).get("daily", []) if r["date"] <= today.isoformat()]
+    rows = [r for r in recovery_capacity.daily_rows(source) if r["date"] <= today.isoformat()]
     # Validation retains missing days as unknown; never reconstruct daily loads
     # from a reported weekly total or a historical average.
     seen = set()
@@ -332,26 +330,38 @@ def _taper_factor(periodization, day):
 
 
 def _with_forecast_day(rows, day, effective):
-    # Existing actual-session days are excluded before this function. On a
-    # covered zero-load day, replace the zero with the single proposed dose.
     key = day.isoformat()
-    return [r for r in rows if r["date"] != key] + [
-        {"date": key, "zone": z, "effective_load": float(effective.get(z, 0.))} for z in COMPONENTS]
+    added = []
+    for z in COMPONENTS:
+        row = {"date": key, "zone": z, "effective_load": float(effective.get(z, 0.))}
+        if z != "STR" and ((z in getattr(effective, "direct", {}) and z in getattr(effective, "depletion", {})) or not effective):
+            row.update(direct_load=getattr(effective, "direct", {}).get(z, 0.),
+                       depletion_fraction=getattr(effective, "depletion", {}).get(z, 0.))
+        added.append(row)
+    return [r for r in rows if r["date"] != key]+added
 
 
 def _add_forecast_session(rows, day, effective):
     key = day.isoformat()
-    current = {r["zone"]: r["effective_load"] for r in rows if r["date"] == key}
-    return _with_forecast_day(rows, day, {z: current.get(z, 0.) + effective.get(z, 0.) for z in COMPONENTS})
+    current = [r for r in rows if r["date"] == key]
+    combined = recovery_capacity.Load({r["zone"]: r["effective_load"] for r in current},
+        direct={r["zone"]: r["direct_load"] for r in current if "direct_load" in r},
+        depletion={r["zone"]: r["depletion_fraction"] for r in current if "depletion_fraction" in r})
+    combined.add(effective)
+    for row in current:
+        if "direct_load" not in row and row["effective_load"] > 0:
+            combined.direct.pop(row["zone"], None)
+            combined.depletion.pop(row["zone"], None)
+    return _with_forecast_day(rows, day, combined)
 
 
 def _candidate_load(blocks, settings, rows, day, *, technical_reference=None, zone_tmax_minutes=None):
-    direct, effective, technical = {z: 0. for z in COMPONENTS}, {z: 0. for z in COMPONENTS}, {}
+    direct, effective, technical = {z: 0. for z in COMPONENTS}, recovery_capacity.Load({z: 0. for z in COMPONENTS}), {}
     for slot in sorted({b.get("session_index", 1) for b in blocks}):
         d, e, technical = _canonical_load([b for b in blocks if b.get("session_index", 1) == slot], settings, rows, day, technical_reference=technical_reference, zone_tmax_minutes=zone_tmax_minutes)
         for z in COMPONENTS:
             direct[z] += d[z]
-            effective[z] += e[z]
+        effective.add(e)
     return direct, effective, technical
 
 
@@ -375,7 +385,7 @@ def _day_candidate_loads(settings, rows, day, technical_reference):
         capacities = tuple(sorted(capacity["zone_tmax_minutes"].items()))
         direct, effective, technical = calculate(signature, capacities)
         # Callers may edit their candidate vectors. Never expose retained maps.
-        return dict(direct), dict(effective), dict(technical)
+        return dict(direct), recovery_capacity.Load(effective), dict(technical)
     return load
 
 
@@ -1054,7 +1064,7 @@ def _direct_q(blocks, settings, *, details=False):
     Ledger rows retain unrounded arithmetic. Presentation rounding happens
     after all blocks are summed, as it does for the selected session totals.
     """
-    direct = {z: 0. for z in COMPONENTS}
+    direct = recovery_capacity.Load({z: 0. for z in COMPONENTS})
     ledger = []
     for block in blocks:
         z = block["zone"]
@@ -1098,6 +1108,10 @@ def _direct_q(blocks, settings, *, details=False):
         if estimate.get("status") == "AVAILABLE":
             amount = block["duration_min"] * estimate["coefficient"]
             direct[estimate["zone"]] += amount
+            capacity = (zone_parameters or {}).get("recovery_capacity")
+            if capacity:
+                fraction, _ = recovery_capacity.segment(capacity, estimate, block["duration_min"])
+                direct.depletion[estimate["zone"]] = direct.depletion.get(estimate["zone"], 0.)+fraction
             if details:
                 ledger.append({"kind": block["kind"], "zone": estimate["zone"], "duration_min": block["duration_min"],
                                "coefficient": estimate["coefficient"], "equivalent_min": amount,
@@ -1114,7 +1128,15 @@ def _canonical_load(blocks, settings, rows, day, *, technical_reference=None, zo
                     if r["zone"] == z and lower <= r["date"] < upper], dtype=float), parameters["base_loads"])
                  for z in COMPONENTS}
     vector = effective_from_direct_vector(direct, technical, parameters, zone_tmax_minutes=zone_tmax_minutes)
-    return direct, dict(zip(COMPONENTS, map(float, vector))), technical
+    effective = recovery_capacity.Load(dict(zip(COMPONENTS, map(float, vector))),
+        direct=direct, depletion=direct.depletion)
+    # Pure/legacy callers without a curve context retain explicit reference estimates.
+    from biathlon.hr_speed import TMAX_RANGES_S
+    for z in recovery_capacity.ZONES:
+        if z not in effective.depletion:
+            reference = (zone_tmax_minutes or {}).get(z) or sum(TMAX_RANGES_S["Z4" if z == "Z5" else z])/120
+            effective.depletion[z] = direct[z]/reference
+    return direct, effective, technical
 
 
 def _technical_reference_reuse():
@@ -1734,7 +1756,7 @@ def _locked_dose_fits(session, profile, readiness):
         return False
     primary = sum(b["duration_min"] for b in session["blocks"] if b["kind"] == "WORK" and b["zone"] == session["zone"])
     base_max = evidence.get("base_max_dose_fraction", .8)
-    rounding = evidence.get("whole_dose_rounding_factor", 1.)
+    rounding = evidence.get("primary_whole_rounding_factor", evidence.get("whole_dose_rounding_factor", 1.))
     if evidence.get("combined_budgets"):
         first = evidence["combined_budgets"][0]
         nominal = evidence["capacity_minutes"]*first["fraction"]*first.get("readiness_factor", 1.)
@@ -3145,7 +3167,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                             explanation="Отбелязано пропускане без наваксване." if decisions[key]["action"] == "SKIP" else "Почивка по индивидуално решение.")
         elif locked_day and locked_day["date"] == key and locked_sessions:
             preserved = deepcopy(locked_sessions)
-            effective = {z: 0. for z in COMPONENTS}
+            effective = recovery_capacity.Load({z: 0. for z in COMPONENTS})
             preserved_q = {z: 0. for z in COMPONENTS}
             for session in preserved:
                 saved_intensity = daily_intensity.saved_contract(session)
@@ -3157,8 +3179,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 session["canonical_effective_load"] = {z: _round(v) for z, v in load.items()}
                 session["total_minutes"] = _round(sum(b["duration_min"] for b in session["blocks"]))
                 for z in COMPONENTS:
-                    effective[z] += load[z]
                     preserved_q[z] += direct_load[z]
+                effective.add(load)
             total = sum(v["total_minutes"] for v in preserved)
             preserved_budget_ok = (all(effective[z] <= budgets[z]["deficit_effective"] + .001 for z in COMPONENTS)
                 and all(preserved_q[z] <= value + .001 for z, value in q_remaining.items()))
@@ -3201,7 +3223,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         session["dose_evidence"]["continuity"] = current_exception
                     else:
                         session["dose_evidence"].pop("continuity", None)
-                    shadow_rows = _add_forecast_session(shadow_rows, day, effective_part)
+                    _, recovery_part, _ = _canonical_load(session["blocks"], settings, shadow_rows, day, technical_reference=technical_reference)
+                    shadow_rows = _add_forecast_session(shadow_rows, day, recovery_part)
                     shadow_days.append({"date":key, "sessions":[session]})
             # Old locks without a recorded dose contract retain their legacy
             # review gate. Newly generated locks record the structural policy.
@@ -3460,7 +3483,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             @lru_cache(maxsize=256)
             def replay_reserved_future_work(candidate_q, candidate_e, required_dates, candidate_primary, candidate_count, candidate_minutes):
                 candidate_q = dict(candidate_q) if candidate_q is not None else None
-                candidate_e = dict(candidate_e) if candidate_e is not None else None
+                candidate_e = recovery_capacity.Load.thaw(candidate_e) if candidate_e is not None else None
                 reserved_rows = forecast_rows
                 reserved_days = list(result_days)
                 objective_spent = {z: 0. for z in COMPONENTS}
@@ -3572,7 +3595,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 # exact same Q/E bundle; reuse only that identical replay.
                 replay = replay_reserved_future_work(
                     tuple(sorted(candidate_q.items())) if candidate_q is not None else None,
-                    tuple(sorted(candidate_e.items())) if candidate_e is not None else None,
+                    recovery_capacity.Load(candidate_e).frozen() if candidate_e is not None else None,
                     frozenset(required_dates) if required_dates is not None else None,
                     candidate_primary, candidate_count, candidate_minutes)
                 # Dates and their selected whole methods come from the same
@@ -3831,6 +3854,13 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 evidence.update(min_dose_fraction=method.get("minimum_fraction", MIN_AEROBIC_DOSE_FRACTION)*readiness_rule["dose_factor"] if z != "STR" and not _absolute_minimum(method) and not method.get("combined_methods") else None,
                                 minimum_primary_work_minutes=minimum_work*_primary_work_share(method), minimum_structure_work_minutes=minimum_work,
                                 minimum_dose_scope="METHOD_ABSOLUTE" if _absolute_minimum(method) else "EACH_THRESHOLD_SESSION" if method.get("double_threshold") else "SUPPLEMENTARY_COMPONENT" if mixed else "SESSION")
+                if method.get("method_library"):
+                    # Report the same role-adjusted complete source minimum
+                    # that _minimum_work admitted, not its unreduced source floor.
+                    minimum_parts = _blocks(method, minimum_work, evidence, settings)
+                    if not minimum_parts:
+                        continue
+                    evidence["min_dose_fraction"] = _minimum_dose_usage(minimum_parts, evidence, z)
                 event_specificity = training_targets.specificity(method, profile.get("race_duration_min"), period)
                 evidence["specificity"] = event_specificity
                 overhead = (method["warmup_min"] + method["cooldown_min"] + method.get("recovery_min", 0.)) * (2 if method.get("double_threshold") else 1)
@@ -4189,6 +4219,14 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                                 technical_spill_reference_role="LEGACY_HISTORICAL_TREF_DIAGNOSTIC_NOT_SPILL_CAPACITY",
                                 source_method_id=method["source_id"], source_method_version=method["source_version"],
                                 explanation="Капацитетът е от индивидуалната крива или обозначената експертна опора. Recovery намалява обема веднъж; усилието се запазва.")
+                # Preserve the admitted half-minute quantization when the same
+                # mixed dose is reopened. Freeze its small rounding allowance;
+                # a lower future readiness still reduces the nominal ceiling.
+                nominal_primary = evidence["capacity_minutes"]*base_fraction*primary_share*readiness_rule["dose_factor"]
+                if (method["structure"] in {"ALTERNATING", "CRUISE_ALTERNATING"}
+                        and nominal_primary > 0
+                        and primary_actual <= nominal_primary+.5*primary_share+1e-6):
+                    evidence["primary_whole_rounding_factor"] = max(1., primary_actual/nominal_primary)
                 if method.get("method_library"):
                     evidence["explanation"] = "Основата е конкретната стандартна доза от избрания метод. Публикуваният протокол и адаптациите са разграничени. Поддържането използва 60% от тази доза; текущата роля определя еднократната корекция за Recovery. Запазват се интензивността, работният интервал и почивките. Избират се допустими цели повторения или непрекъснат вариант; ограниченията на плана могат да намалят или отложат задачата."
                     evidence["method_dose_factors"].append({"stage": "WHOLE_VARIANT_AND_PLAN_LIMITS", "work_minutes": _round(actual_work),
@@ -4344,7 +4382,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                                 "direct_equivalent_minutes": {z: _round(v) for z, v in direct.items()},
                                 "method_library": deepcopy(method.get("method_library") or method.get("method_card")),
                                 "registry_version": method_registry.VERSION,
-                                "dose_evidence": evidence}, dict(effective)))
+                                "dose_evidence": evidence}, recovery_capacity.Load(effective)))
             if choices:
                 minimum_cores = {}
                 if period_objectives is not None:
@@ -4388,7 +4426,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         # readiness; only earlier dates are intervening load.
                         before = [r for r in shadow if r["date"] != placed_key] + [
                             r for r in rows if r["date"] == placed_key]
-                        readiness_key = (placed_day, tuple((r["date"],r["zone"],r["effective_load"])
+                        readiness_key = (placed_day, tuple((r["date"],r["zone"],r["effective_load"],r.get("direct_load"),r.get("depletion_fraction"))
                             for r in before if r["date"] <= placed_key))
                         if readiness_key not in placement_readiness_cache:
                             placement_readiness_cache[readiness_key] = {r["zone"]:r["readiness_percent"]

@@ -91,6 +91,7 @@ class ManualSpeedTestInput(Strict):
         return self
 
 class Baseline(Strict):
+    recovery_basis: Literal["CAPACITY_Q", "LEGACY_E"] = "LEGACY_E"
     baseline_daily_min: float = Field(gt=0)
     baseline_raw_daily_min: Nonnegative | None
     history_days: int = Field(ge=0,le=40)
@@ -103,6 +104,10 @@ class RecoveryCurrentV2(Baseline):
     days_to_practical_recovery: Nonnegative
 
 class RecoveryDailyV2(Baseline):
+    direct_load: Nonnegative | None = None
+    depletion_fraction: Nonnegative | None = None
+    capacity_estimated: bool = False
+    exhaustion_multiplier: float | None = Field(default=None, ge=.8, le=1.1)
     date: str
     zone: Zone
     readiness_before_percent: float = Field(ge=0,le=100)
@@ -120,7 +125,7 @@ class RecoveryForecastV2(Strict):
     readiness_percent: float = Field(ge=0,le=100)
 
 class RecoveryMetadataV2(Strict):
-    algorithm_version: Literal["recovery-daily-e-biexponential-v2.3"]
+    algorithm_version: Literal["recovery-capacity-biexponential-v2.4"]
     parameter_version: str
     parameter_fingerprint: str
     practical_full_recovery_percent: Literal[90]

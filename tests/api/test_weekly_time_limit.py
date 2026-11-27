@@ -55,7 +55,11 @@ def test_small_limit_preserves_only_complete_minimum_doses(monkeypatch, hours, f
                 assert 10 <= session["main_work_minutes"] <= 30
             else:
                 assert session["main_work_minutes"] >= evidence["minimum_primary_work_minutes"] - .001
-                assert evidence.get("applied_minimum_capacity_fraction", evidence["applied_structure_fraction"]) >= evidence["min_dose_fraction"] - .001
+                if evidence["min_dose_fraction"] is not None:
+                    assert evidence.get("applied_minimum_capacity_fraction", evidence["applied_structure_fraction"]) >= evidence["min_dose_fraction"] - .001
+                else:
+                    assert evidence["minimum_dose_scope"] == "METHOD_ABSOLUTE"
+                    assert engine.method_dosing.structure_fits(session["blocks"], evidence)
         for day in plan["days"]:
             for z in engine.COMPONENTS:
                 assert sum(s["canonical_effective_load"][z] for s in day["sessions"]) <= day["load_budget"]["components"][z]["deficit_effective"] + .005

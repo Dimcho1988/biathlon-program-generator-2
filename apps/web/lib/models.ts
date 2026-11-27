@@ -4,7 +4,7 @@ export const MODEL_ZONES = ["Z1","Z2","Z3","Z4","Z5","STR"] as const;
 export type ModelZone = typeof MODEL_ZONES[number];
 export interface ZoneConfig {duration_coefficient:number;shape:number;sensitivity:number;initial_daily_min:number}
 export interface RecoveryConfig {expected_revision:number;zones:Record<ModelZone,ZoneConfig>}
-interface Baseline {baseline_daily_min:number;baseline_raw_daily_min:number|null;history_days:number;baseline_source:"NO_HISTORY"|"NO_ZONE_LOAD"|"SHORT_HISTORY"|"SPARSE_ZONE_HISTORY"|"PERSONAL"}
+interface Baseline {recovery_basis?:"CAPACITY_Q"|"LEGACY_E";baseline_daily_min:number;baseline_raw_daily_min:number|null;history_days:number;baseline_source:"NO_HISTORY"|"NO_ZONE_LOAD"|"SHORT_HISTORY"|"SPARSE_ZONE_HISTORY"|"PERSONAL"}
 export interface RecoveryDataQuality {
   complete:boolean;missing_days:number;partial_activities:number;expected_days:number;covered_days:number;
   readiness_available?:boolean;readiness_basis?:"RECORDED_LOAD"|"ESTIMATED_LOAD"|"UNAVAILABLE";estimated?:boolean;
@@ -15,10 +15,10 @@ export interface RecoveryDataQuality {
 export interface RecoveryV2 {
   schema_version:"recovery-history-v2";athlete_id:string;period_start:string;period_end:string;as_of:string;
   basis:"load-only";time_resolution:"calendar-day";ready_threshold_percent:90;
-  model:{algorithm_version:"recovery-daily-e-biexponential-v2"|"recovery-daily-e-biexponential-v2.1"|"recovery-daily-e-biexponential-v2.2"|"recovery-daily-e-biexponential-v2.3";parameter_version:string;parameter_fingerprint:string;practical_full_recovery_percent:90};
+  model:{algorithm_version:"recovery-daily-e-biexponential-v2"|"recovery-daily-e-biexponential-v2.1"|"recovery-daily-e-biexponential-v2.2"|"recovery-daily-e-biexponential-v2.3"|"recovery-capacity-biexponential-v2.4";parameter_version:string;parameter_fingerprint:string;practical_full_recovery_percent:90};
   config_revision:number;settings:Record<ModelZone,ZoneConfig>;
   current:Array<Baseline & {zone:ModelZone;readiness_percent:number;residual_fatigue:number;days_to_practical_recovery:number}>;
-  daily:Array<Baseline & {date:string;zone:ModelZone;readiness_before_percent:number;readiness_after_percent:number;residual_fatigue_after:number;impulse:number;effective_load:number;isolated_days_to_90:number;residual_fatigue_now?:number|null;shape_used?:number|null}>;
+  daily:Array<Baseline & {date:string;zone:ModelZone;readiness_before_percent:number;readiness_after_percent:number;residual_fatigue_after:number;impulse:number;effective_load:number;isolated_days_to_90:number;residual_fatigue_now?:number|null;shape_used?:number|null;direct_load?:number|null;depletion_fraction?:number|null;capacity_estimated?:boolean;exhaustion_multiplier?:number|null}>;
   forecast:Array<{zone:ModelZone;days:number;readiness_percent:number}>;
   source_as_of:string;source_stale:boolean;warnings:string[];
   data_quality?:RecoveryDataQuality|null;
@@ -28,7 +28,7 @@ const finite=(v:unknown):v is number=>typeof v==="number"&&Number.isFinite(v);
 export function parseRecoveryV2(value:unknown):RecoveryV2 {
   const r=value as RecoveryV2;
   if(!r || r.schema_version!=="recovery-history-v2" || r.ready_threshold_percent!==90 || r.basis!=="load-only"
-    || r.time_resolution!=="calendar-day" || !r.model || !["recovery-daily-e-biexponential-v2","recovery-daily-e-biexponential-v2.1","recovery-daily-e-biexponential-v2.2","recovery-daily-e-biexponential-v2.3"].includes(r.model.algorithm_version)
+    || r.time_resolution!=="calendar-day" || !r.model || !["recovery-daily-e-biexponential-v2","recovery-daily-e-biexponential-v2.1","recovery-daily-e-biexponential-v2.2","recovery-daily-e-biexponential-v2.3","recovery-capacity-biexponential-v2.4"].includes(r.model.algorithm_version)
     || r.model.practical_full_recovery_percent!==90 || !Number.isInteger(r.config_revision)
     || !Array.isArray(r.current)||r.current.length!==6||!Array.isArray(r.daily)||!Array.isArray(r.forecast)||!r.settings) throw new Error("Невалиден Recovery v2 модел.");
   for(const [i,c] of r.current.entries()) {
@@ -45,7 +45,16 @@ export function parseRecoveryV2(value:unknown):RecoveryV2 {
   }
   for(const p of r.forecast) if(!MODEL_ZONES.includes(p.zone)||!finite(p.days)||p.days<0||!finite(p.readiness_percent)||p.readiness_percent<0||p.readiness_percent>100)throw new Error("Невалидна възстановителна крива.");
   for(const d of r.daily) if(!MODEL_ZONES.includes(d.zone)||!/^\d{4}-\d{2}-\d{2}$/.test(d.date)||!finite(d.readiness_after_percent)||d.readiness_after_percent<0||d.readiness_after_percent>100)throw new Error("Невалидна история на възстановяването.");
-  if(r.model.algorithm_version==="recovery-daily-e-biexponential-v2.3" && r.daily.some(d=>!finite(d.shape_used)||d.shape_used<1||d.shape_used>5))throw new Error("Невалидна динамична стръмност.");
+  if(["recovery-daily-e-biexponential-v2.3","recovery-capacity-biexponential-v2.4"].includes(r.model.algorithm_version) && r.daily.some(d=>!finite(d.shape_used)||d.shape_used<1||d.shape_used>5))throw new Error("Невалидна динамична стръмност.");
+  if(r.model.algorithm_version==="recovery-capacity-biexponential-v2.4") {
+    for(const d of r.daily) if(d.recovery_basis==="CAPACITY_Q" &&
+      (!finite(d.direct_load)||d.direct_load<0||!finite(d.depletion_fraction)||d.depletion_fraction<0
+       ||!finite(d.exhaustion_multiplier)||Math.abs(d.exhaustion_multiplier-(.8+.6*Math.max(0,Math.min(.5,d.depletion_fraction-.5))))>1e-9))
+      throw new Error("Невалидна оценка на изчерпването.");
+    for(const c of r.current) if(c.recovery_basis==="CAPACITY_Q" &&
+      Math.abs(c.baseline_daily_min-((c.baseline_raw_daily_min??0)>0?c.baseline_raw_daily_min!:r.settings[c.zone].initial_daily_min))>.001)
+      throw new Error("Несъгласувана среднодневна база Q.");
+  }
   const quality=r.data_quality;
   if(quality!=null){
     if(quality.issues!==undefined&&(!Array.isArray(quality.issues)||quality.issues.some(issue=>!issue||typeof issue.reason!=="string"

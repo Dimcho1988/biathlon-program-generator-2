@@ -10,11 +10,11 @@ from hashlib import sha256
 import json
 import math
 
-from biathlon import dosing_curve, hr_speed, preliminary_capacity, speed_duration, speed_equivalence, initial_speed_profile
+from biathlon import dosing_curve, hr_speed, preliminary_capacity, speed_duration, speed_equivalence, initial_speed_profile, recovery_capacity
 from .speed_load_cache import SpeedLoadCache
 
 
-VERSION = "component-load-common-profile-v3-initial-heuristic"
+VERSION = "component-load-common-profile-v4-recovery-capacity"
 COMPARISON_CONTEXT_VERSION = speed_equivalence.VERSION
 ZONES = ("Z1", "Z2", "Z3", "Z4", "Z5")
 _context_cache = SpeedLoadCache(max_entries=32, ttl_seconds=300)
@@ -160,6 +160,8 @@ def context_from_speed_view(view=None):
                if curve_source == "BLENDED_DOSING_CURVE" else view.get("speed_zones"))
     comparison = speed_equivalence.prepare(profile, sport=view.get("sport"),
         curve_version=result["curve_model_version"])
+    comparison["recovery_capacity"] = recovery_capacity.prepare(curve, minutes, comparison)
+    result["recovery_capacity"] = comparison["recovery_capacity"]
     result["zone_profile"] = profile
     result["fingerprint"] = sha256(json.dumps(result, sort_keys=True, separators=(",", ":"),
                                                 allow_nan=False).encode()).hexdigest()
