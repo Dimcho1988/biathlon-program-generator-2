@@ -161,7 +161,7 @@ def test_rpc_adapter_does_not_retry_an_uncertain_queue_write():
     assert len(calls)==1
 
 
-def test_dashboard_preparation_gets_a_turn_even_with_a_busy_generation_queue():
+def test_shutdown_during_dashboard_does_not_accept_a_planning_job():
     stopping = Event()
     calls = []
     def job():
@@ -175,7 +175,7 @@ def test_dashboard_preparation_gets_a_turn_even_with_a_busy_generation_queue():
         process_next_prepared_dashboard=dashboard), stopping)
     worker.join(timeout=2)
     assert not worker.is_alive()
-    assert calls == ['job', 'dashboard']
+    assert calls == ['dashboard']
 
 
 def test_day_endpoint_accepts_without_replanning(monkeypatch):
