@@ -1756,7 +1756,7 @@ def _locked_dose_fits(session, profile, readiness):
         return False
     primary = sum(b["duration_min"] for b in session["blocks"] if b["kind"] == "WORK" and b["zone"] == session["zone"])
     base_max = evidence.get("base_max_dose_fraction", .8)
-    rounding = evidence.get("whole_dose_rounding_factor", 1.)
+    rounding = evidence.get("primary_whole_rounding_factor", evidence.get("whole_dose_rounding_factor", 1.))
     if evidence.get("combined_budgets"):
         first = evidence["combined_budgets"][0]
         nominal = evidence["capacity_minutes"]*first["fraction"]*first.get("readiness_factor", 1.)
@@ -3854,6 +3854,13 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 evidence.update(min_dose_fraction=method.get("minimum_fraction", MIN_AEROBIC_DOSE_FRACTION)*readiness_rule["dose_factor"] if z != "STR" and not _absolute_minimum(method) and not method.get("combined_methods") else None,
                                 minimum_primary_work_minutes=minimum_work*_primary_work_share(method), minimum_structure_work_minutes=minimum_work,
                                 minimum_dose_scope="METHOD_ABSOLUTE" if _absolute_minimum(method) else "EACH_THRESHOLD_SESSION" if method.get("double_threshold") else "SUPPLEMENTARY_COMPONENT" if mixed else "SESSION")
+                if method.get("method_library"):
+                    # Report the same role-adjusted complete source minimum
+                    # that _minimum_work admitted, not its unreduced source floor.
+                    minimum_parts = _blocks(method, minimum_work, evidence, settings)
+                    if not minimum_parts:
+                        continue
+                    evidence["min_dose_fraction"] = _minimum_dose_usage(minimum_parts, evidence, z)
                 event_specificity = training_targets.specificity(method, profile.get("race_duration_min"), period)
                 evidence["specificity"] = event_specificity
                 overhead = (method["warmup_min"] + method["cooldown_min"] + method.get("recovery_min", 0.)) * (2 if method.get("double_threshold") else 1)
@@ -4212,6 +4219,14 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                                 technical_spill_reference_role="LEGACY_HISTORICAL_TREF_DIAGNOSTIC_NOT_SPILL_CAPACITY",
                                 source_method_id=method["source_id"], source_method_version=method["source_version"],
                                 explanation="Капацитетът е от индивидуалната крива или обозначената експертна опора. Recovery намалява обема веднъж; усилието се запазва.")
+                # Preserve the admitted half-minute quantization when the same
+                # mixed dose is reopened. Freeze its small rounding allowance;
+                # a lower future readiness still reduces the nominal ceiling.
+                nominal_primary = evidence["capacity_minutes"]*base_fraction*primary_share*readiness_rule["dose_factor"]
+                if (method["structure"] in {"ALTERNATING", "CRUISE_ALTERNATING"}
+                        and nominal_primary > 0
+                        and primary_actual <= nominal_primary+.5*primary_share+1e-6):
+                    evidence["primary_whole_rounding_factor"] = max(1., primary_actual/nominal_primary)
                 if method.get("method_library"):
                     evidence["explanation"] = "Основата е конкретната стандартна доза от избрания метод. Публикуваният протокол и адаптациите са разграничени. Поддържането използва 60% от тази доза; текущата роля определя еднократната корекция за Recovery. Запазват се интензивността, работният интервал и почивките. Избират се допустими цели повторения или непрекъснат вариант; ограниченията на плана могат да намалят или отложат задачата."
                     evidence["method_dose_factors"].append({"stage": "WHOLE_VARIANT_AND_PLAN_LIMITS", "work_minutes": _round(actual_work),
