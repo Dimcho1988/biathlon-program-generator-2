@@ -51,11 +51,12 @@ begin
    period_start,period_end,as_of,provenance,activity_count,ready_at,activated_at)
    values(g,a,'99006000-0000-0000-0000-000000000002',n,'FULL_SYNC',1,0,'99006000-0000-0000-0000-000000000003',n,
     'ACTIVE','athlete-snapshot-v1',repeat('b',64),snap,current_date,current_date,current_date,'{}',0,clock_timestamp(),clock_timestamp());
+  delete from onflows_private.dashboard_dirty_events where athlete_alias=a;
   update public.onflows_athlete_analysis_state set active_generation_id=g,active_revision=n where athlete_alias=a;
   expected:=case when n=2 then 0 when n<=5 then 1 when n=6 then 2 when n<=9 then 3 else 4 end;
   assert coalesce((select requested_revision from onflows_private.training_plan_updates where athlete_alias=a),0)=expected,
    'An unchanged source re-planned, a material observation was missed, or a paused plan was queued';
-  assert (select requested_revision>prepared_revision from onflows_private.prepared_dashboards where athlete_alias=a),
+  assert exists(select 1 from onflows_private.dashboard_dirty_events where athlete_alias=a),
    'Step-only changes must still invalidate display data';
   assert (select snapshot_payload=snap from public.onflows_analysis_generations where generation_id=g),
    'Planning projection must not remove stored daily observations';
