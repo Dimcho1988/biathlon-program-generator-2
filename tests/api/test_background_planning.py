@@ -127,7 +127,7 @@ def test_shutdown_drains_the_inflight_job_without_accepting_another():
     assert not thread.is_alive() and calls==['job']
 
 
-def test_page_preparation_gets_a_turn_even_with_a_busy_generation_queue():
+def test_shutdown_during_page_preparation_does_not_accept_a_job():
     stopping = Event()
     calls = []
     def job():
@@ -141,7 +141,7 @@ def test_page_preparation_gets_a_turn_even_with_a_busy_generation_queue():
         process_next_prepared_view=page), stopping)
     worker.join(timeout=2)
     assert not worker.is_alive()
-    assert calls == ['job', 'page']
+    assert calls == ['page']
 
 
 def test_metadata_and_exact_revision_reads_are_small_and_athlete_scoped():
