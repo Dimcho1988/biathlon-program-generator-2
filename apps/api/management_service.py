@@ -240,13 +240,15 @@ def _analysis_identity(repository, alias, hints=None):
     # A new analysis may activate between the compact and full reads. Use the
     # full read's own identity and digest together, never the earlier pointer.
     analysis = repository.active_analysis(alias) or {}
-    return analysis, _hash(analysis.get("snapshot_payload"))
+    from .planning_snapshot import for_planning
+    return analysis, _hash(for_planning(analysis.get("snapshot_payload")))
 
 
 def rule_versions():
     """Canonical calculation identity shared by saved inputs and the worker queue."""
-    from . import learning_service, speed_zone_history
+    from . import learning_service, speed_zone_history, planning_snapshot
     return {
+        "planning_inputs": planning_snapshot.VERSION,
         "component_load": COMPONENT_LOAD_VERSION,
         "component_load_context": COMPONENT_CAPACITY_VERSION,
         "engine": training_plan_engine.VERSION,
