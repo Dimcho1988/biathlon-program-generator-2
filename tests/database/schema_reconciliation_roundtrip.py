@@ -94,19 +94,24 @@ def _baseline_roundtrip():
 
 def main():
     # The acceptance exercises the historical baseline's exact 18 definitions.
-    # A later migration legitimately changes enqueue semantics. Restore its
-    # reviewed baseline only for this roundtrip, then put the current body back
-    # before subsequent application-contract fixtures run.
+    # Later migrations change enqueue semantics and the staging RPC's timeout.
+    # Restore their reviewed baseline only for this roundtrip, then put the
+    # current definitions back before application-contract fixtures run.
     current = catalog()
     definition = json.loads(sql("select jsonb_build_object('definition',pg_get_functiondef("
         "'public.enqueue_onflows_sync_job(text,text,text,jsonb)'::regprocedure));"))["definition"]
+    staging_signature = "public.stage_onflows_analysis_generation(uuid,uuid,uuid,jsonb,text,date,date,date,jsonb,jsonb,boolean)"
+    staging = json.loads(sql("select jsonb_build_object('definition',pg_get_functiondef('"
+        + staging_signature + "'::regprocedure));"))["definition"]
     sql((ROOT / "supabase/migrations/202608270002_enqueue_sync_job_conflict_target.sql").read_text())
+    sql("alter function " + staging_signature + " reset statement_timeout;")
     try:
         _baseline_roundtrip()
     finally:
         sql(definition)
+        sql(staging)
     assert catalog() == current, "Historical roundtrip changed the current application schema"
-    print("PASS current enqueue behavior survives historical format reconciliation", flush=True)
+    print("PASS current enqueue behavior and staging budget survive historical format reconciliation", flush=True)
 
 
 if __name__ == "__main__":
