@@ -75,12 +75,90 @@ def _imports(module, path, tree):
             yield from (f"{base}.{item.name}" for item in node.names if item.name != "*")
 
 
-def _source_record(root, module):
+# These are downstream Recovery v2 contracts, not per-recording load inputs.
+# Keep shared validation and speed-test declarations in the activity identity.
+_RECOVERY_DECLARATIONS = frozenset({
+    "ZoneConfig", "RecoveryConfigInput", "Baseline", "RecoveryCurrentV2",
+    "RecoveryDailyV2", "RecoveryForecastV2", "RecoveryMetadataV2",
+    "RecoveryHistoryV2", "initial_settings",
+})
+_RECOVERY_ENTRYPOINTS = _RECOVERY_DECLARATIONS | {"project_recovery", "recovery_v2"}
+
+
+class _UnsafeActivityProjection(Exception):
+    pass
+
+
+def _activity_tree(module, tree):
+    """Omit only isolated downstream recovery dependencies; fail closed.
+
+    The service itself remains fully hashed. A new call to recovery from an
+    activity dependency disables the projection and restores the full graph.
+    """
+    if module == "apps.api.model_schemas":
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "biathlon.recovery_v2":
+                if any(n.name not in {"ZONES", "defaults"} or n.asname for n in node.names):
+                    raise _UnsafeActivityProjection()
+        kept = [node for node in tree.body
+                if getattr(node, "name", None) not in _RECOVERY_DECLARATIONS
+                and not (isinstance(node, ast.ImportFrom) and node.module == "biathlon.recovery_v2")]
+        references = {node.id for root in kept for node in ast.walk(root)
+                      if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
+        if references & (_RECOVERY_DECLARATIONS | {"ZONES", "defaults"}):
+            raise _UnsafeActivityProjection()
+        return ast.Module(body=kept, type_ignores=[]), True
+    inspected = tree
+    if module == "apps.api.model_service":
+        # Only these existing, downstream entry points may use Recovery v2.
+        # Don't exclude their bodies from the service hash: integration changes
+        # remain conservative invalidations even when leaf recovery changes don't.
+        from copy import deepcopy
+        inspected = deepcopy(tree)
+        inspected.body = [n for n in inspected.body if getattr(n, "name", None) != "project_recovery"]
+        for node in inspected.body:
+            if isinstance(node, ast.ClassDef) and node.name == "ModelStore":
+                node.body = [n for n in node.body if getattr(n, "name", None) != "config"]
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "biathlon.recovery_v2":
+                raise _UnsafeActivityProjection()
+            if isinstance(node, ast.Import) and any(n.name == "biathlon.recovery_v2" for n in node.names):
+                raise _UnsafeActivityProjection()
+            if isinstance(node, ast.ImportFrom) and node.module == "biathlon":
+                if any(n.name == "recovery_v2" and n.asname for n in node.names):
+                    raise _UnsafeActivityProjection()
+    for node in ast.walk(inspected):
+        if isinstance(node, ast.ImportFrom) and any(
+                n.name in _RECOVERY_ENTRYPOINTS and n.asname for n in node.names):
+            raise _UnsafeActivityProjection()
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and (
+                node.value in _RECOVERY_ENTRYPOINTS or module == "apps.api.model_service" and node.value == "config"):
+            raise _UnsafeActivityProjection()
+        if module == "apps.api.model_service" and isinstance(node, ast.Attribute) and node.attr == "config":
+            raise _UnsafeActivityProjection()
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in _RECOVERY_ENTRYPOINTS:
+            # Snapshot unions describe stored outputs; they don't calculate load.
+            if module == "apps.api.schemas" and node.id == "RecoveryHistoryV2":
+                continue
+            raise _UnsafeActivityProjection()
+        if isinstance(node, ast.Attribute) and node.attr in _RECOVERY_ENTRYPOINTS:
+            raise _UnsafeActivityProjection()
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "RecoveryHistoryV2":
+            raise _UnsafeActivityProjection()
+    return tree, module == "apps.api.model_service"
+
+
+def _source_record(root, module, *, activity=False):
     path = _source_path(root, module)
     if path is None:
         return None
     tree = ast.parse(path.read_text(encoding="utf-8"))
+    omit_recovery = False
+    if activity:
+        tree, omit_recovery = _activity_tree(module, tree)
     dependencies = tuple(_imports(module, path, tree)) if module not in _TERMINALS else ()
+    if omit_recovery:
+        dependencies = tuple(name for name in dependencies if name != "biathlon.recovery_v2")
     for node in ast.walk(tree):
         if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
             if node.body and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant):
@@ -91,13 +169,13 @@ def _source_record(root, module):
 
 
 @lru_cache(maxsize=None)
-def _release_source(module):
+def _release_source(module, activity=False):
     # Share small digests/import lists across overlapping calculation domains.
     # ASTs and source strings are released immediately after each module.
-    return _source_record(_ROOT, module)
+    return _source_record(_ROOT, module, activity=activity)
 
 
-def source_manifest(domain, *, root=None, _release=False):
+def source_manifest(domain, *, root=None, _release=False, _project_activity=True):
     """Auditable source list; no imported module executes during discovery.
 
     Missing declared roots fail closed instead of silently accepting an old
@@ -114,7 +192,12 @@ def source_manifest(domain, *, root=None, _release=False):
         if module in visited or module in _BOUNDARIES:
             continue
         visited.add(module)
-        record = _release_source(module) if _release else _source_record(root, module)
+        activity = domain == "activity" and _project_activity
+        try:
+            record = (_release_source(module, activity) if _release
+                      else _source_record(root, module, activity=activity))
+        except _UnsafeActivityProjection:
+            return source_manifest(domain, root=root, _release=_release, _project_activity=False)
         if record is None:
             continue
         sources[module], dependencies = record
