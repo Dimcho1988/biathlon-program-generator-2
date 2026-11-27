@@ -28,6 +28,18 @@ describe("Recovery v2 interface",()=>{
     const readOnly=renderToStaticMarkup(<RecoveryV2Section history={fixture} canEdit={false}/>);
     expect(readOnly).not.toContain("Запази и преизчисли");expect(readOnly).toContain("disabled");
   });
+  it("uses automatic shape in v2.3 while retaining the permanent baseline",()=>{
+    const dynamic=structuredClone(fixture);
+    dynamic.model.algorithm_version="recovery-daily-e-biexponential-v2.3";
+    for(const row of dynamic.current)row.baseline_daily_min=40;
+    expect(parseRecoveryV2(dynamic).current[0].baseline_daily_min).toBe(40);
+    const html=renderToStaticMarkup(<RecoveryV2Section history={dynamic} canEdit/>);
+    expect(html).toContain("Динамична стръмност");
+    expect(html).toContain("Базова добавка, мин/ден");
+    expect(html).not.toContain('aria-label="Z5 Стръмност"');
+    dynamic.current[0].baseline_daily_min=20;
+    expect(()=>parseRecoveryV2(dynamic)).toThrow(/базова добавка/);
+  });
   it("accepts v2.2 and exposes the permanent addition without mislabelling older projections",()=>{
     const additive=structuredClone(fixture);
     additive.model.algorithm_version="recovery-daily-e-biexponential-v2.2";

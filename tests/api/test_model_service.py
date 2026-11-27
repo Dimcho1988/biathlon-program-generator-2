@@ -51,11 +51,16 @@ def test_projection_is_causal_uses_e_and_does_not_mutate_source(monkeypatch):
     h=projected["recovery_history"]
     assert original==copy
     assert h["schema_version"]=="recovery-history-v2" and h["ready_threshold_percent"]==90
-    assert h["model"]["algorithm_version"]=="recovery-daily-e-biexponential-v2.2"
+    assert h["model"]["algorithm_version"]=="recovery-daily-e-biexponential-v2.3"
     assert h["current"][1]["baseline_daily_min"]==168  # 20 base + 148 weighted daily E
     assert h["current"][1]["baseline_raw_daily_min"]==148
     assert h["current"][1]["days_to_practical_recovery"]>1.5
     assert h["current"][1]["readiness_percent"]==projected["training_status"]["zones"][1]["recovery_readiness_percent"]
+    assert all(1 <= row["shape_used"] <= 5 for row in h["daily"])
+    assert "comparison" not in h
+    daily=[{k:row[k] for k in ("date","zone","effective_load")} for row in h["daily"]]
+    planning=m.recovery_v2.simulate(daily,h["settings"],target=NOW.date(),include_details=False)
+    assert planning["current"]==h["current"]
     cfg={"expected_revision":2,"zones":initial_settings()}
     cfg["zones"]["Z2"]["duration_coefficient"]=2
     changed=m.project_recovery(Store(),"ath-test",original,now=NOW,config=cfg)

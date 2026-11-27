@@ -14,21 +14,21 @@ def test_60_over_20_is_three_days_to_absolute_90(shape):
     i=r.impulse(TODAY,60,20,config(shape=shape))
     assert i.residual(3)==pytest.approx(10,rel=1e-12)
     assert r.days_to_ready([i],TODAY)==pytest.approx(3)
-    if shape==1:
-        assert 100-i.residual(1)==pytest.approx(53.584111664)
+    assert i.shape==pytest.approx(1.8)
     # Recovery gain is greatest initially and gradually slows.
     gains=[i.residual(t)-i.residual(t+.1) for t in (0,.5,1,2)]
     assert all(a>b for a,b in zip(gains,gains[1:]))
 
-def test_duration_and_shape_are_independent_and_fatigue_is_retained():
+def test_duration_drives_shape_and_fatigue_is_retained():
     a=r.impulse(TODAY,60,20,config())
     b=r.impulse(TODAY,60,20,config(shape=5))
-    assert a.residual(.3)!=pytest.approx(b.residual(.3))
+    assert a == b  # legacy manual shape no longer overrides the policy
     assert a.residual(3)==pytest.approx(b.residual(3))
     old=r.impulse(TODAY-timedelta(days=1),60,20,config())
     assert r.days_to_ready([old,a],TODAY)>3
     doubled=r.impulse(TODAY,60,20,config(duration_coefficient=2))
     assert r.days_to_ready([doubled],TODAY)==pytest.approx(6)
+    assert doubled.shape > a.shape
 
 def test_tiny_load_does_not_reset_readiness_but_still_accumulates():
     i=r.impulse(TODAY,.5,20,config())

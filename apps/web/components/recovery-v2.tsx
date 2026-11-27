@@ -11,7 +11,8 @@ const additiveSourceLabels={PERSONAL:"Лична средна + добавка",
 export function RecoveryV2Section({history,canEdit}:{history:RecoveryV2;canEdit:boolean}){
   const [zone,setZone]=useState<ModelZone>("Z2");
   const {unavailable:incomplete,estimated}=recoveryDisplayState(history);
-  const permanentBase=history.model.algorithm_version==="recovery-daily-e-biexponential-v2.2";
+  const dynamicShape=history.model.algorithm_version==="recovery-daily-e-biexponential-v2.3";
+  const permanentBase=dynamicShape||history.model.algorithm_version==="recovery-daily-e-biexponential-v2.2";
   const contributors=history.daily.filter(row=>row.zone===zone&&(row.residual_fatigue_now??0)>=.01).sort((a,b)=>(b.residual_fatigue_now??0)-(a.residual_fatigue_now??0));
   return <section className="history-section recovery-section" aria-labelledby="recovery-title">
     <div className="section-heading"><div><p className="section-kicker">Индивидуално възстановяване</p><h2 id="recovery-title">Готовност по зони · ориентир 90%</h2></div><p>Към {history.as_of}</p></div>
@@ -27,6 +28,7 @@ export function RecoveryV2Section({history,canEdit}:{history:RecoveryV2;canEdit:
         {permanentBase&&<><div><dt>Постоянна добавка</dt><dd>{n(history.settings[c.zone].initial_daily_min)} мин E/ден</dd></div><div><dt>{estimated?"Средна от отчетен и оценен товар":"Лична средна"}</dt><dd>{c.baseline_raw_daily_min===null?"няма история":`${n(c.baseline_raw_daily_min)} мин E/ден`}</dd></div></>}
       </dl><small>{estimated?`Отчетен и оценен товар${permanentBase?" + добавка":""}`:(permanentBase?additiveSourceLabels:sourceLabels)[c.baseline_source]} · {c.history_days}/40 дни</small>
     </article>)}</div>
+    {dynamicShape&&<p>Динамична стръмност: по-дългият начален срок усилва бързата фаза на възстановяване. Коефициентът се определя отделно за всеки дневен товар и остава фиксиран за него.</p>}
     <RecoveryTimeline history={history}/>
     <RecoverySettingsEditor history={history} canEdit={canEdit}/>
     <details className="recovery-provenance"><summary>Защо срокът е такъв? · Дневна история и произход</summary>
@@ -34,10 +36,10 @@ export function RecoveryV2Section({history,canEdit}:{history:RecoveryV2;canEdit:
       <p>Срокът за {zone} включва остатъка от всички предишни натоварвания. {permanentBase
         ?"За всеки ден началната продължителност е товарът E ÷ (постоянната добавка + личната средна за предходните до 40 дни) × коефициента за продължителност. Таблицата показва целия делител за съответния ден."
         :"За всеки ден началната продължителност е товарът E ÷ тогавашната среднодневна база × коефициента за продължителност. При много малка база дори няколко минути могат да дадат дълъг срок."}</p>
-      {!incomplete&&contributors.length>0&&<><h3>Дни с най-голяма остатъчна умора в {zone}</h3><div className="activity-table-wrap"><table><thead><tr><th>Ден на товара</th><th>E, мин</th><th>База тогава, мин/ден</th><th>До 90% само от този товар</th><th>Остатъчна умора днес, п.п.</th></tr></thead><tbody>{contributors.slice(0,8).map(d=><tr key={d.date}><th>{d.date}</th><td>{n(d.effective_load)}</td><td>{n(d.baseline_daily_min)}</td><td>{n(d.isolated_days_to_90)} дни</td><td>{n(d.residual_fatigue_now!)}</td></tr>)}</tbody></table></div><p>Изолираният срок се брои от деня на товара. В картата горе срокът се брои от днес и включва цялата натрупана умора. Показани са до 8 дни с остатък поне 0,01 п.п.</p></>}
+      {!incomplete&&contributors.length>0&&<><h3>Дни с най-голяма остатъчна умора в {zone}</h3><div className="activity-table-wrap"><table><thead><tr><th>Ден на товара</th><th>E, мин</th><th>База тогава, мин/ден</th>{dynamicShape&&<th>Стръмност</th>}<th>До 90% само от този товар</th><th>Остатъчна умора днес, п.п.</th></tr></thead><tbody>{contributors.slice(0,8).map(d=><tr key={d.date}><th>{d.date}</th><td>{n(d.effective_load)}</td><td>{n(d.baseline_daily_min)}</td>{dynamicShape&&<td>{d.shape_used==null?"—":n(d.shape_used)}</td>}<td>{n(d.isolated_days_to_90)} дни</td><td>{n(d.residual_fatigue_now!)}</td></tr>)}</tbody></table></div><p>Изолираният срок се брои от деня на товара. В картата горе срокът се брои от днес и включва цялата натрупана умора. Показани са до 8 дни с остатък поне 0,01 п.п.</p></>}
       <p>Товарът E може да включва разливане от други зони и не е равен непременно на реалните минути в тази пулсова зона.</p>
       <details><summary>Всички {estimated?"изчислени":"отчетени"} дни за {zone}</summary>{estimated&&<p>Дневният товар включва моделната оценка на непокритото време.</p>}<div className="activity-table-wrap"><table><thead><tr><th>Дата</th><th>E, мин</th><th>База, мин/ден</th><th>{estimated?"Оценена готовност след товара":"Готовност след товара"}</th></tr></thead><tbody>{history.daily.filter(d=>d.zone===zone).map(d=><tr key={d.date}><td>{d.date}</td><td>{n(d.effective_load)}</td><td>{n(d.baseline_daily_min)}</td><td>{incomplete?"Недостатъчни данни":`${n(d.readiness_after_percent)}%`}</td></tr>)}</tbody></table></div></details>
-      <p>Експертен модел за калибриране. Умората преди началото на наличната история е неизвестна. {permanentBase&&"Recovery v2.2 · постоянна базова добавка. "}Версия {history.model.parameter_version}.</p>
+      <p>Експертен модел за калибриране. Умората преди началото на наличната история е неизвестна. {dynamicShape?"Recovery v2.3 · динамична стръмност. ":permanentBase?"Recovery v2.2 · постоянна базова добавка. ":""}Версия {history.model.parameter_version}.</p>
     </details>
   </section>;
 }

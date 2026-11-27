@@ -112,6 +112,7 @@ class RecoveryDailyV2(Baseline):
     effective_load: Nonnegative
     isolated_days_to_90: Nonnegative
     residual_fatigue_now: Nonnegative | None = None
+    shape_used: float | None = Field(default=None, ge=1, le=5)
 
 class RecoveryForecastV2(Strict):
     zone: Zone
@@ -119,7 +120,7 @@ class RecoveryForecastV2(Strict):
     readiness_percent: float = Field(ge=0,le=100)
 
 class RecoveryMetadataV2(Strict):
-    algorithm_version: Literal["recovery-daily-e-biexponential-v2.2"]
+    algorithm_version: Literal["recovery-daily-e-biexponential-v2.3"]
     parameter_version: str
     parameter_fingerprint: str
     practical_full_recovery_percent: Literal[90]
