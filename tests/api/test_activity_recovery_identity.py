@@ -8,7 +8,7 @@ import pytest
 from apps.api import activity_refresh, preparation_identity as identity
 from apps.api.cloud import InMemorySnapshotRepository
 from apps.api.real_service import refresh
-from biathlon import recovery_v2
+from biathlon import recovery_v2, recovery_capacity
 from tests.api.test_incremental_activity_refresh import Recordings, cloud_fixture, END, NOW, ENV
 
 
@@ -40,7 +40,7 @@ def test_recovery_change_preserves_activity_but_invalidates_consumers(release_so
     before = {d: key(release_sources, d) for d in identity._ROOTS}
     if schema_change:
         edit(release_sources, 'apps/api/model_schemas.py',
-             'recovery-daily-e-biexponential-v2.3', 'recovery-daily-e-biexponential-v2.4')
+             recovery_v2.VERSION, recovery_v2.VERSION + '-test')
     else:
         edit(release_sources, 'biathlon/recovery_v2.py', '1. + 4. *', '1. + 3. *')
     assert key(release_sources) == before['activity']
@@ -52,6 +52,7 @@ def test_recovery_change_preserves_activity_but_invalidates_consumers(release_so
     ('apps/api/model_schemas.py', 'extra="forbid"', 'extra="ignore"'),
     ('apps/api/model_schemas.py', 'le=150,strict=True', 'le=149,strict=True'),
     ('biathlon/component_load.py', 'VERSION =', 'CHANGED = 1\nVERSION ='),
+    ('biathlon/recovery_capacity.py', 'return minutes/t,', 'return 2*minutes/t,'),
     ('apps/api/activity_shadow_pipeline.py', 'from __future__ import annotations',
      'from __future__ import annotations\nCHANGED = 1'),
 ])
@@ -97,7 +98,8 @@ def test_recovery_release_reuses_recordings_and_matches_full_load(monkeypatch, r
         refresh(repo, environ=ENV, client=client, period_end=END, now=NOW, athlete_settings=settings)
         return repo.latest('pilot')
     before = sync()
-    daily = before['load_history']['daily']
+    daily = recovery_capacity.daily_rows(before['load_history'])
+    assert any(r.get('depletion_fraction', 0) > 0 for r in daily)
     recovery_before = recovery_v2.simulate(daily, target=END)
     edit(release_sources, 'biathlon/recovery_v2.py', '1. + 4. *', '1. + 3. *')
     # Exercise changed recovery numerics independently of the unchanged loads.
@@ -105,7 +107,7 @@ def test_recovery_release_reuses_recordings_and_matches_full_load(monkeypatch, r
     after = sync()
     assert client.streams == []
     assert after['load_history'] == before['load_history']
-    assert recovery_v2.simulate(after['load_history']['daily'], target=END) != recovery_before
+    assert recovery_v2.simulate(recovery_capacity.daily_rows(after['load_history']), target=END) != recovery_before
     monkeypatch.setattr(activity_refresh, 'calculation_version', lambda _: None)
     full = sync()
     assert len(client.streams) == 2

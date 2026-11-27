@@ -2,10 +2,10 @@
 import math
 from functools import lru_cache
 
-from . import raw_speed, speed_equivalence
+from . import raw_speed, speed_equivalence, recovery_capacity
 from .sport_heart_rate import reference_offset
 
-VERSION = "unified-leading-indicator-load-v8-recording-pauses"
+VERSION = "unified-leading-indicator-load-v9-recovery-capacity"
 HR_INTERVAL_VERSION = "normalized-hr-recording-intervals-v1"
 HR_ZONE_TIME_VERSION = "shared-hr-zone-times-v1"
 HR_SIGNALS = {"MODEL", "hr_raw_bpm", "hr_clean_bpm", "hrmod_candidate_bpm", "hrmod_final_bpm"}
@@ -228,6 +228,9 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
         endpoints.add(float(duration_s))
     points = sorted(endpoints)
     totals = {z: {"zone": z, "raw_time_min": 0., "equivalent_time_min": 0.} for z in speed_equivalence.ZONES}
+    capacity = (parameters or {}).get("recovery_capacity")
+    fractions = {z: 0. for z in totals}
+    capacity_sources = {}
     sources = {"HEART_RATE": 0., "SPEED": 0.}
     hr_sources = {}
     speed_status = {"ACTIVE": 0., "REST": 0., "UNAVAILABLE": 0.}
@@ -289,12 +292,18 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
             row = totals[value["zone"]]
             row["raw_time_min"] += dt/60.
             row["equivalent_time_min"] += dt/60.*value["coefficient"]
+            if capacity:
+                fraction, basis = recovery_capacity.segment(capacity, value, dt/60.)
+                fractions[value["zone"]] += fraction
+                capacity_sources[basis] = capacity_sources.get(basis, 0.)+dt
             if value.get("saturated_above_v10"):
                 saturated += dt
     elapsed = points[-1] if points else 0.
     recorded = elapsed-paused
     active = math.fsum(r["raw_time_min"]*60 for r in totals.values())
-    return {"version": VERSION, "equivalence_version": speed_equivalence.VERSION,
+    return {**({"recovery_capacity": {"version": recovery_capacity.VERSION, "fractions": fractions,
+                    "source_seconds": capacity_sources}} if capacity else {}),
+            "version": VERSION, "equivalence_version": speed_equivalence.VERSION,
             "leading_indicator": leading_indicator, "zones": list(totals.values()),
             "recorded_seconds": recorded, "active_seconds": active,
             "elapsed_seconds": elapsed, "paused_seconds": paused,

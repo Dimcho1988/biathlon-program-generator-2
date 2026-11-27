@@ -5,13 +5,14 @@ import { useRouter } from "next/navigation";
 import { MODEL_ZONES, saveModel, type RecoveryV2, type ZoneConfig } from "../lib/models";
 
 export function RecoverySettingsEditor({ history, canEdit }: { history: RecoveryV2; canEdit: boolean }) {
-  const dynamicShape = history.model.algorithm_version === "recovery-daily-e-biexponential-v2.3";
+  const capacityModel = history.model.algorithm_version === "recovery-capacity-biexponential-v2.4";
+  const dynamicShape = capacityModel || history.model.algorithm_version === "recovery-daily-e-biexponential-v2.3";
   const permanentBase = dynamicShape || history.model.algorithm_version === "recovery-daily-e-biexponential-v2.2";
   const parameters: Array<{ key: keyof ZoneConfig; label: string; min: number; max: number }> = [
     { key: "duration_coefficient", label: "Продължителност ×", min: .1, max: 5 },
     ...(!dynamicShape ? [{ key: "shape" as const, label: "Стръмност", min: 1, max: 10 }] : []),
     { key: "sensitivity", label: "Чувствителност", min: .05, max: 3 },
-    { key: "initial_daily_min", label: permanentBase ? "Базова добавка, мин/ден" : "Начална база, мин/ден", min: .1, max: 600 },
+    { key: "initial_daily_min", label: capacityModel ? "Резервна база Q / добавка STR" : permanentBase ? "Базова добавка, мин/ден" : "Начална база, мин/ден", min: .1, max: 600 },
   ];
   const router = useRouter();
   const [draft, setDraft] = useState({ revision: history.config_revision, zones: history.settings });
@@ -59,17 +60,17 @@ export function RecoverySettingsEditor({ history, canEdit }: { history: Recovery
       <p>{dynamicShape ? "Стръмността се определя автоматично за всеки дневен товар: 1 при начална продължителност до 2 дни, плавно до 5 между 2 и 7 дни и 5 над 7 дни. По-високата стойност ускорява началното възстановяване, като запазва изолирания срок до 90% при съществен товар. Коефициентът за продължителност остава регулируем." : "Продължителност × 1 е началният модел. Стръмност 1 е обикновена експонента; по-висока стойност засилва бързата начална фаза при същия срок до 90% за съществено натоварване. При малък товар близо до прага готовността може да настъпи по-рано."}</p>
       <div className="activity-table-wrap"><table><thead><tr><th>Зона</th>{parameters.map(parameter => <th key={parameter.key}>{parameter.label}</th>)}</tr></thead>
         <tbody>{MODEL_ZONES.map(zone => <tr key={zone}><th>{zone}</th>{parameters.map(parameter => <td key={parameter.key}>
-          <input type="number" required aria-label={`${zone} ${parameter.label}`} disabled={!canEdit || busy || awaitingResult}
+          <input type="number" required aria-label={`${zone} ${parameter.label}`} disabled={!canEdit || busy || awaitingResult || (capacityModel && zone!=="STR" && parameter.key==="sensitivity")}
             min={parameter.min} max={parameter.max} step="any" value={draft.zones[zone][parameter.key]}
             onChange={event => {
               setError("");
               setDraft({ ...draft, zones: { ...draft.zones, [zone]: { ...draft.zones[zone], [parameter.key]: Number(event.target.value) } } });
             }} style={{ width: "6rem" }} />
         </td>)}</tr>)}</tbody></table></div>
-      <p>Чувствителността определя първоначалната умора. {permanentBase
+      <p>{capacityModel?"При Z1–Z5 началната умора идва от изчерпването. Чувствителността се използва само за STR и стари записи по E. Резервната база Q се използва само при липса на история или нулева лична средна; при STR базата остава постоянна добавка.":<>Чувствителността определя първоначалната умора. {permanentBase
         ? "Базовата добавка участва постоянно в делителя заедно с личния среднодневен товар за предходните до 40 дни. При липсваща история се използва само добавката, без да се удвоява."
-        : "Началната база плавно отстъпва при поне 7 дни история и натрупан товар, равен на 7 начални дневни дози. При нулев или съвсем малък товар остава експертна опора."}</p>
-      <p>{permanentBase
+        : "Началната база плавно отстъпва при поне 7 дни история и натрупан товар, равен на 7 начални дневни дози. При нулев или съвсем малък товар остава експертна опора."}</>}</p>
+      <p>{capacityModel?"За общо скъсяване или удължаване на срока използвайте „Продължителност ×“. Коефициентът 0,8–1,1 се определя автоматично от изчерпването.":permanentBase
         ? "По-голяма базова добавка намалява относителната доза и скъсява възстановяването и при пълна история. Тя не добавя тренировъчен товар или начална умора."
         : "Началната база има значение при недостатъчна история. Когато се използва личната средна, промяната ѝ може да няма видим ефект. За по-кратко или по-дълго възстановяване променете „Продължителност ×“ за съответната зона."}</p>
       {canEdit && <button type="submit" className="action-button" disabled={busy || awaitingResult || !dirty}>{busy ? "Записване и преизчисляване…" : "Запази и преизчисли"}</button>}

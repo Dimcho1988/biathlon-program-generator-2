@@ -40,6 +40,23 @@ describe("Recovery v2 interface",()=>{
     dynamic.current[0].baseline_daily_min=20;
     expect(()=>parseRecoveryV2(dynamic)).toThrow(/базова добавка/);
   });
+  it("accepts capacity recovery and rejects incorrect Q baselines and multipliers",()=>{
+    const capacity=structuredClone(fixture);
+    capacity.model.algorithm_version="recovery-capacity-biexponential-v2.4";
+    capacity.current.forEach(c=>{c.recovery_basis=c.zone==="STR"?"LEGACY_E":"CAPACITY_Q";});
+    capacity.daily=[{...capacity.current[1],date:"2026-09-12",readiness_before_percent:100,
+      readiness_after_percent:100/3,residual_fatigue_after:200/3,impulse:200/3,effective_load:30,
+      direct_load:20,depletion_fraction:2/3,exhaustion_multiplier:.9,shape_used:2.28,isolated_days_to_90:3.6}];
+    expect(parseRecoveryV2(capacity)).toBe(capacity);
+    const html=renderToStaticMarkup(<RecoveryV2Section history={capacity} canEdit/>);
+    for(const text of ["Recovery v2.4","мин Q/ден","Изчерпване","0,8–1,1","Резервна база Q"])expect(html).toContain(text);
+    expect(html).not.toContain('aria-label="Z2 Стръмност"');
+    capacity.current[0].baseline_daily_min=40;
+    expect(()=>parseRecoveryV2(capacity)).toThrow(/среднодневна база Q/);
+    capacity.current[0].baseline_daily_min=20;
+    capacity.daily[0].exhaustion_multiplier=1.1;
+    expect(()=>parseRecoveryV2(capacity)).toThrow(/изчерпването/);
+  });
   it("accepts v2.2 and exposes the permanent addition without mislabelling older projections",()=>{
     const additive=structuredClone(fixture);
     additive.model.algorithm_version="recovery-daily-e-biexponential-v2.2";

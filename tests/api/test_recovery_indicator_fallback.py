@@ -179,7 +179,8 @@ def test_projection_current_daily_and_forecast_share_estimated_ledger(monkeypatc
     projected = model_service.project_recovery(repository, "test", original,
         now=datetime(2026, 10, 29, 12, tzinfo=timezone.utc), config={"expected_revision": 0, "zones": initial_settings()})
     estimated, _ = planning_history_estimate.prepare(history, repository.calendar, configured(), TODAY)
-    rows = estimated["daily"] + [{**r, "zone": "STR"} for r in estimated["strength"]["daily"]]
+    from biathlon.recovery_capacity import daily_rows
+    rows = daily_rows(estimated)
     expected = recovery_v2.simulate(rows, initial_settings(), target=TODAY)
     result = projected["recovery_history"]
     for key in ("current", "daily", "forecast"):
