@@ -24,6 +24,13 @@ that duplicate field. Scientific summaries, intervals, load, dates, source/run
 references and the original reusable checkpoint remain intact. The existing
 size constraint, retention pins, monotonic revisions and atomic activation remain.
 
+A subsequent warm sync reused all 199 recordings but hit the inherited 8-second
+SQL timeout while inserting the immutable generation catalogue. Staging now has
+a function-scoped 30-second SQL budget and a worker-only 35-second transport
+budget. Other RPCs and API reads retain their existing limits. There is still
+only one transport attempt for an ambiguous write; durable queue retries and
+all publication fences remain responsible for recovery.
+
 Validation covers lane ordering, bounded scheduling, background progress,
 uninterrupted shutdown, publication fencing, requested/expired demand and retry
 cooldowns. The lifetime SQL regression captures an import checkpoint larger than
@@ -31,8 +38,9 @@ the former failing day bound and asserts exact scientific fields and retained
 generation cache. Database CI rebuilds all migrations and runs the existing
 concurrency/retention contracts. No scientific formulas or training settings change.
 
-Apply the backward-compatible database migrations before deploying the worker
-and API. The page-worker source fingerprint changes, so prepared page caches
+Apply the two backward-compatible claim/history migrations before deploying the
+worker and API. Apply the staging-timeout migration after the worker has its
+35-second transport budget. The page-worker source fingerprint changes, so prepared page caches
 refresh once. Activity, dashboard and learning source identities remain unchanged.
 The queue change reduces waiting behind prewarming; it does not reduce the
 generator's own execution time. Earlier offline replay timings are scenarios,

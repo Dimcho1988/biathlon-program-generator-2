@@ -1139,8 +1139,11 @@ def _run_optional_housekeeping(
 def _repository_from_environment() -> SyncRepository:
     # Keep credentials and network-capable client construction outside import.
     from .oauth_store import SupabasePilotRepository
+    from .worker_transport import WorkerStoreClient
+    import httpx
 
-    return SupabasePilotRepository.from_environment()
+    return SupabasePilotRepository.from_environment(
+        client=WorkerStoreClient(timeout=httpx.Timeout(15., connect=5.)))
 
 
 def _worker_id() -> str:
