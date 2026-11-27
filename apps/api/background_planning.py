@@ -84,11 +84,13 @@ def start(repository, stopping):
     def run():
         next_automatic, next_preparation = 0., 0.
         planning_worked = False
+        preparation_drained = False
         while not stopping.is_set():
             prepared = 0
-            if not planning_worked or monotonic() >= next_preparation:
+            if not preparation_drained and (not planning_worked or monotonic() >= next_preparation):
                 prepared = prepare_pending(repository, stopping, requested_first=True)
                 next_preparation = monotonic()+15.
+            preparation_drained = False
             if stopping.is_set():
                 break
             try:
@@ -109,6 +111,9 @@ def start(repository, stopping):
                 # No claimed programme: use the spare lane to drain prewarming
                 # normally, still bounded so a newly arriving plan gets a turn.
                 prepared += prepare_pending(repository, stopping)
+                # Check planning immediately after this batch. A plan arriving
+                # during idle prewarming must not wait through a second batch.
+                preparation_drained = True
             stopping.wait(0.1 if planning_worked or prepared else 3.)
 
     # Non-daemon: SIGTERM stops new claims while a fenced in-flight draft drains.

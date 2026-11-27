@@ -267,3 +267,27 @@ def test_empty_background_lane_does_not_waste_requested_capacity(view_lanes):
         process_next_background_view=lambda: False)
     assert background_planning.prepare_pending(repo, Event(), requested_first=True) == background_planning.PREPARATION_JOBS
     assert len(requested) == background_planning.PREPARATION_JOBS
+
+
+def test_plan_arriving_during_idle_batch_does_not_wait_through_another_batch(monkeypatch, view_lanes):
+    monkeypatch.setattr(background_planning, 'PREPARATION_JOBS', 3)
+    stopping = Event()
+    calls = []
+    def urgent():
+        assert 'bulk' not in calls, 'A second preparation batch delayed an arriving plan'
+        calls.append('requested')
+        return False
+    def plan():
+        calls.append('plan-check')
+        if 'bulk' in calls:
+            stopping.set()
+            return True
+        return False
+    repo = view_lanes(process_next_requested_view=urgent,
+        process_next_background_view=lambda: False,
+        process_next_prepared_view=lambda: (calls.append('bulk'), True)[1],
+        process_next_planning_job=plan, refresh_due_training_plans=lambda: False)
+    worker = background_planning.start(repo, stopping)
+    worker.join(2)
+    assert not worker.is_alive()
+    assert calls == ['requested', 'plan-check', 'bulk', 'bulk', 'bulk', 'plan-check']
