@@ -258,3 +258,12 @@ def test_requested_time_budget_does_not_start_extra_prewarming(monkeypatch, view
     repo = view_lanes(process_next_requested_view=slow,
         process_next_background_view=lambda: pytest.fail('Exceeded soft time budget'))
     assert background_planning.prepare_pending(repo, Event(), requested_first=True) == 1
+
+
+def test_empty_background_lane_does_not_waste_requested_capacity(view_lanes):
+    requested = []
+    repo = view_lanes(
+        process_next_requested_view=lambda: (requested.append(1), True)[1],
+        process_next_background_view=lambda: False)
+    assert background_planning.prepare_pending(repo, Event(), requested_first=True) == background_planning.PREPARATION_JOBS
+    assert len(requested) == background_planning.PREPARATION_JOBS

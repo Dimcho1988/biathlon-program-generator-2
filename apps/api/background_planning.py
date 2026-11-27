@@ -57,7 +57,17 @@ def prepare_pending(repository, stopping, *, requested_first=False):
             break
     if priority and not stopping.is_set() and monotonic()-started < PREPARATION_SECONDS:
         try:
-            completed += bool(process_next(repository, demand=False))
+            background_worked = bool(process_next(repository, demand=False))
+            completed += background_worked
+            # Do not leave an opened page behind solely because the reserved
+            # background lane is empty. The combined cap remains 32 jobs.
+            if not background_worked and completed == limit:
+                for kind, call in processors:
+                    if stopping.is_set() or monotonic()-started >= PREPARATION_SECONDS:
+                        break
+                    if kind not in failed and call():
+                        completed += 1
+                        break
         except Exception as exc:
             logger.warning('background_view_tick_deferred error_type=%s', type(exc).__name__)
     if completed:
