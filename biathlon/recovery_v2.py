@@ -12,7 +12,7 @@ from collections import deque
 from datetime import date, timedelta
 import math
 
-VERSION = "recovery-daily-e-biexponential-v2.2"
+VERSION = "recovery-daily-e-biexponential-v2.3"
 ZONES = ("Z1", "Z2", "Z3", "Z4", "Z5", "STR")
 INITIAL_DAILY = dict(zip(ZONES, (40., 20., 8., 4., 2., 8.)))
 SENSITIVITY = dict(zip(ZONES, (.55, .70, .88, 1., 1.12, .95)))
@@ -66,9 +66,16 @@ class Impulse:
             + math.exp(-self.rate_slow*self.shape*t))
 
 
+def duration_shape(nominal_days):
+    """Expert 1→5 shape policy fixed at dose creation, not remaining time."""
+    days = number(nominal_days, "nominal days")
+    return 1. + 4. * max(0., min(1., (days - 2.) / 5.))
+
+
 def impulse(day, effective, daily_baseline, config):
     dose = number(effective, "effective load") / number(daily_baseline, "daily baseline", positive=True)
     coefficient = number(config["duration_coefficient"], "duration coefficient", positive=True)
+    # Retain validation of the legacy setting for stored-profile compatibility.
     shape = number(config["shape"], "shape", positive=True)
     sensitivity = number(config["sensitivity"], "sensitivity", positive=True)
     if not 1 <= shape <= 10:
@@ -76,6 +83,7 @@ def impulse(day, effective, daily_baseline, config):
     if dose == 0:
         return None
     days = coefficient * dose
+    shape = duration_shape(days)
     # Cap one daily impulse at 100 percentage points, not the total fatigue.
     # Larger doses still extend their decay horizon through `days`.
     amplitude = min(100., 100. * sensitivity * dose)
@@ -205,7 +213,8 @@ def simulate(daily, configs=None, *, target=None, include_details=True, include_
                     "residual_fatigue_after":after, "impulse":added.amplitude if added else 0.,
                     "effective_load":effective, "baseline_daily_min":used,
                     "baseline_raw_daily_min":raw, "history_days":n, "baseline_source":source,
-                    "isolated_days_to_90":days_to_ready([added],day) if added else 0.})
+                    "isolated_days_to_90":days_to_ready([added],day) if added else 0.,
+                    "shape_used":added.shape if added else 1.})
                 contributions.append((rows[-1], added))
             last_baseline = used, raw, n, source
             if prefix_cache is not None:

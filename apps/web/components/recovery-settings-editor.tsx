@@ -5,10 +5,11 @@ import { useRouter } from "next/navigation";
 import { MODEL_ZONES, saveModel, type RecoveryV2, type ZoneConfig } from "../lib/models";
 
 export function RecoverySettingsEditor({ history, canEdit }: { history: RecoveryV2; canEdit: boolean }) {
-  const permanentBase = history.model.algorithm_version === "recovery-daily-e-biexponential-v2.2";
+  const dynamicShape = history.model.algorithm_version === "recovery-daily-e-biexponential-v2.3";
+  const permanentBase = dynamicShape || history.model.algorithm_version === "recovery-daily-e-biexponential-v2.2";
   const parameters: Array<{ key: keyof ZoneConfig; label: string; min: number; max: number }> = [
     { key: "duration_coefficient", label: "Продължителност ×", min: .1, max: 5 },
-    { key: "shape", label: "Стръмност", min: 1, max: 10 },
+    ...(!dynamicShape ? [{ key: "shape" as const, label: "Стръмност", min: 1, max: 10 }] : []),
     { key: "sensitivity", label: "Чувствителност", min: .05, max: 3 },
     { key: "initial_daily_min", label: permanentBase ? "Базова добавка, мин/ден" : "Начална база, мин/ден", min: .1, max: 600 },
   ];
@@ -55,7 +56,7 @@ export function RecoverySettingsEditor({ history, canEdit }: { history: Recovery
 
   return <details className="recovery-settings"><summary>Донастройване по зони</summary>
     <form onSubmit={save}>
-      <p>Продължителност × 1 е началният модел. Стръмност 1 е обикновена експонента; по-висока стойност засилва бързата начална фаза при същия срок до 90% за съществено натоварване. При малък товар близо до прага готовността може да настъпи по-рано.</p>
+      <p>{dynamicShape ? "Стръмността се определя автоматично за всеки дневен товар: 1 при начална продължителност до 2 дни, плавно до 5 между 2 и 7 дни и 5 над 7 дни. По-високата стойност ускорява началното възстановяване, като запазва изолирания срок до 90% при съществен товар. Коефициентът за продължителност остава регулируем." : "Продължителност × 1 е началният модел. Стръмност 1 е обикновена експонента; по-висока стойност засилва бързата начална фаза при същия срок до 90% за съществено натоварване. При малък товар близо до прага готовността може да настъпи по-рано."}</p>
       <div className="activity-table-wrap"><table><thead><tr><th>Зона</th>{parameters.map(parameter => <th key={parameter.key}>{parameter.label}</th>)}</tr></thead>
         <tbody>{MODEL_ZONES.map(zone => <tr key={zone}><th>{zone}</th>{parameters.map(parameter => <td key={parameter.key}>
           <input type="number" required aria-label={`${zone} ${parameter.label}`} disabled={!canEdit || busy || awaitingResult}

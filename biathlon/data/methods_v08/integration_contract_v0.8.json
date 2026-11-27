@@ -361,7 +361,7 @@
     "new_zone_without_history_auto_enabled": false
   },
   "recovery": {
-    "model": "recovery-daily-e-biexponential-v2.2",
+    "model": "recovery-daily-e-biexponential-v2.3",
     "gate_percent": 90,
     "multiply_dose_by_readiness_percent": false,
     "resolution": "DAY",
@@ -375,6 +375,7 @@
       "Z5": 2,
       "STR": 8
     },
+    "dynamic_shape": "1 + 4 * clamp((nominal_days - 2) / 5, 0, 1); frozen per daily dose",
     "hard_seven_day_cap": false,
     "wellness": "LOAD_ONLY_DIAGNOSTIC_IN_CURRENT_IMPLEMENTATION",
     "second_session": "shared daily budget; reassess available actual data without fabricated hourly recovery"
