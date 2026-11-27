@@ -23,10 +23,21 @@ begin
     'activities',jsonb_build_array(jsonb_build_object('date',d,'sport','Run','zones',jsonb_build_array(jsonb_build_object('zone','Z1','equivalent_time_min',42.))))),
    'wellness_calendar',jsonb_build_array(jsonb_build_object('date',d,'metrics',jsonb_build_object('hrv',jsonb_build_object('value',60)))))
   where generation_id=g;
+ -- A large import checkpoint used to exceed the entire day's 256 KiB bound.
+ -- Only the duplicate technical cache is omitted; the generation keeps it.
+ update public.onflows_analysis_generation_activities
+  set catalog_payload=catalog_payload||jsonb_build_object('refresh_checkpoint',repeat('x',300000),
+   'canonical_summary',jsonb_build_object('scientific_value',42.125),'intervals',jsonb_build_array(1,2,3))
+  where generation_id=g;
  n:=onflows_private.capture_lifetime_generation(g);
  if n<>90 then raise exception 'Covered history was not captured: %',n;end if;
  if onflows_private.capture_lifetime_generation(g)<>0 then raise exception 'Replay duplicated day inputs';end if;
  data:=public.read_onflows_history_day_inputs(a,d,d+2);
+ assert not (data#>'{0,payload,catalog,0}' ? 'refresh_checkpoint'), 'History duplicated the import checkpoint';
+ assert data#>>'{0,payload,catalog,0,canonical_summary,scientific_value}'='42.125', 'Scientific summary changed';
+ assert data#>'{0,payload,catalog,0,intervals}'='[1,2,3]'::jsonb, 'Intervals changed';
+ assert (select length(catalog_payload->>'refresh_checkpoint')=300000 from public.onflows_analysis_generation_activities where generation_id=g),
+  'Reusable generation checkpoint was removed';
  if jsonb_array_length(data)<>3 or data#>>'{0,payload,activities,0,zones,0,equivalent_time_min}'<>'42'
   or data#>>'{0,payload,source_quality_counts,limited_activities}'<>'2' or data#>>'{0,payload,unidentified_activities}'<>'2'
   or jsonb_array_length(data#>'{1,payload,daily}')<>0 then raise exception 'Original facts changed or unknown days invented';end if;

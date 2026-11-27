@@ -2,6 +2,7 @@
 import logging
 from threading import Thread
 from time import monotonic
+from functools import partial
 
 logger = logging.getLogger(__name__)
 
@@ -11,28 +12,35 @@ PREPARATION_SECONDS = 120.
 PREPARATION_JOBS = 32
 
 
-def prepare_pending(repository, stopping):
+def prepare_pending(repository, stopping, *, requested_first=False):
     """Prepare a bounded batch, round-robin across the independent queues.
 
     Calls stay serial and retain each processor's model-memory lock and SQL
     lease/publication fences. A time budget is a soft boundary between jobs;
     an in-flight calculation always finishes rather than losing its work.
     """
+    priority = requested_first and callable(getattr(repository, 'prepared_view', None))
     processors = [(kind, getattr(repository, name, None)) for kind, name in (
         ('dashboard', 'process_next_prepared_dashboard'),
         ('learning', 'process_next_prepared_learning'),
         ('prepared_view', 'process_next_prepared_view'),
     )]
+    if priority:
+        from .prepared_views import process_next
+        processors[-1] = ('prepared_view', partial(process_next, repository, demand=True))
     processors = [(kind, call) for kind, call in processors if callable(call)]
     started = monotonic()
     completed = 0
     failed = set()
+    # Reserve one place for prewarming, so a busy planning queue still makes
+    # progress on unopened pages. Old repository adapters retain their policy.
+    limit = max(0, PREPARATION_JOBS - 1) if priority else PREPARATION_JOBS
     while not stopping.is_set():
         worked = False
         for kind, call in processors:
             if stopping.is_set():
                 return completed
-            if completed >= PREPARATION_JOBS:
+            if completed >= limit:
                 break
             if kind in failed:
                 continue
@@ -44,11 +52,17 @@ def prepare_pending(repository, stopping):
                 # Do not repeatedly call a broken queue during this batch.
                 failed.add(kind)
                 logger.warning('%s_tick_deferred error_type=%s', kind, type(exc).__name__)
-        if (not worked or completed >= PREPARATION_JOBS
+        if (not worked or completed >= limit
                 or monotonic() - started >= PREPARATION_SECONDS):
             break
+    if priority and not stopping.is_set() and monotonic()-started < PREPARATION_SECONDS:
+        try:
+            completed += bool(process_next(repository, demand=False))
+        except Exception as exc:
+            logger.warning('background_view_tick_deferred error_type=%s', type(exc).__name__)
     if completed:
-        logger.info('prepared_batch jobs=%s seconds=%.3f', completed, monotonic()-started)
+        logger.info('prepared_batch jobs=%s seconds=%.3f lane=%s',
+                    completed, monotonic()-started, 'requested' if priority else 'all')
     return completed
 
 
@@ -63,7 +77,7 @@ def start(repository, stopping):
         while not stopping.is_set():
             prepared = 0
             if not planning_worked or monotonic() >= next_preparation:
-                prepared = prepare_pending(repository, stopping)
+                prepared = prepare_pending(repository, stopping, requested_first=True)
                 next_preparation = monotonic()+15.
             if stopping.is_set():
                 break
@@ -80,6 +94,11 @@ def start(repository, stopping):
                     planning_worked = bool(repository.refresh_due_training_plans())
                 except Exception as exc:
                     logger.warning('management_tick_deferred error_type=%s', type(exc).__name__)
+            if (not planning_worked and not stopping.is_set()
+                    and callable(getattr(repository, 'prepared_view', None))):
+                # No claimed programme: use the spare lane to drain prewarming
+                # normally, still bounded so a newly arriving plan gets a turn.
+                prepared += prepare_pending(repository, stopping)
             stopping.wait(0.1 if planning_worked or prepared else 3.)
 
     # Non-daemon: SIGTERM stops new claims while a fenced in-flight draft drains.
