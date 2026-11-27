@@ -14,6 +14,17 @@ def start(repository, stopping):
     def run():
         next_automatic, next_dashboard, next_learning, next_view = 0., 0., 0., 0.
         while not stopping.is_set():
+            warmer = getattr(repository, 'process_next_prepared_dashboard', None)
+            if callable(warmer) and monotonic() >= next_dashboard:
+                next_dashboard = monotonic()+15.
+                try:
+                    # Prepare a pending status page before accepting a plan
+                    # that can occupy the shared model lane for minutes.
+                    warmer()
+                except Exception as exc:
+                    logger.warning('dashboard_tick_deferred error_type=%s', type(exc).__name__)
+            if stopping.is_set():
+                break
             try:
                 worked = processor()
             except Exception as exc:
@@ -27,14 +38,6 @@ def start(repository, stopping):
                     repository.refresh_due_training_plans()
                 except Exception as exc:
                     logger.warning('management_tick_deferred error_type=%s', type(exc).__name__)
-            warmer = getattr(repository, 'process_next_prepared_dashboard', None)
-            if not stopping.is_set() and callable(warmer) and monotonic() >= next_dashboard:
-                next_dashboard = monotonic()+15.
-                try:
-                    # A busy planning queue must not starve the status page.
-                    warmer()
-                except Exception as exc:
-                    logger.warning('dashboard_tick_deferred error_type=%s', type(exc).__name__)
             learner = getattr(repository, 'process_next_prepared_learning', None)
             if not stopping.is_set() and callable(learner) and monotonic() >= next_learning:
                 # Give read-model preparation a bounded turn even with a busy
