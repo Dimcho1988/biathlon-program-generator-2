@@ -152,9 +152,8 @@ def project_recovery(repository,alias,snapshot,*,now=None,config=None):
     from biathlon.planning_history import recovery_coverage
     from .recovery_load_projection import prepare as prepare_recovery_load
     recovery_source, coverage = prepare_recovery_load(repository, alias, source, today, recovery_coverage(source, today))
-    daily=[{"date":r["date"],"zone":r["zone"],"effective_load":r["effective_load"]} for r in recovery_source["daily"]]
-    daily += [{"date":r["date"],"zone":"STR","effective_load":r["effective_load"]}
-              for r in (recovery_source.get("strength") or {}).get("daily",[])]
+    from biathlon.recovery_capacity import daily_rows
+    daily = daily_rows(recovery_source)
     if not daily: raise ValueError("Daily E history is required for Recovery v2")
     result=recovery_v2.simulate(daily,cfg["zones"],target=today)
     stale=date.fromisoformat(source["period_end"]) < today
@@ -166,7 +165,9 @@ def project_recovery(repository,alias,snapshot,*,now=None,config=None):
         config_revision=cfg["expected_revision"],settings=cfg["zones"],source_as_of=source["period_end"],source_stale=stale,
         data_quality=coverage,
         wellness_diagnostics=(snapshot.get("recovery_history") or {}).get("wellness_diagnostics"),
-        warnings=["EXPERT_MODEL", "DAILY_AGGREGATED_DOSES", "UNKNOWN_FATIGUE_BEFORE_HISTORY"]
+        warnings=["EXPERT_MODEL", "DAILY_AGGREGATED_DOSES", "UNKNOWN_FATIGUE_BEFORE_HISTORY",
+                  "NO_INTRASESSION_RECONSTITUTION", "CAPACITY_Q_RECOVERY_WITH_LEGACY_STR"]
+            + (["REFERENCE_CAPACITY_ESTIMATE"] if any(r.get("capacity_estimated") for r in result["daily"]) else [])
             + (["SOURCE_STALE_NO_NEW_LOAD_ASSUMPTION"] if stale else [])
             + (["INCOMPLETE_LOAD_COVERAGE"] if not coverage["complete"] else [])
             + (["ESTIMATED_LOAD_RECOVERY"] if coverage["estimated"] else [])

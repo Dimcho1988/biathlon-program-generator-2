@@ -264,7 +264,10 @@
       0.75,
       0.92
     ],
-    "source_status": ["ACCEPTED", "PARTIAL"],
+    "source_status": [
+      "ACCEPTED",
+      "PARTIAL"
+    ],
     "outlier_admission": "per_band_20_percent",
     "measured_speed_required": true,
     "confirmed_stop_max_kmh": 1,
@@ -361,13 +364,17 @@
     "new_zone_without_history_auto_enabled": false
   },
   "recovery": {
-    "model": "recovery-daily-e-biexponential-v2.3",
+    "model": "recovery-capacity-biexponential-v2.4",
     "gate_percent": 90,
     "multiply_dose_by_readiness_percent": false,
     "resolution": "DAY",
     "intraday_recovery_prediction_supported": false,
-    "baseline": "permanent addition + mean previous up to 40 covered completed daily E",
-    "permanent_addition_E_min_per_day": {
+    "baseline": "Z1–Z5: mean prior covered daily Q; initial base only with no/zero mean. STR/legacy: permanent addition + mean E",
+    "dynamic_shape": "1 + 4 * clamp((nominal_days - 2) / 5, 0, 1); frozen per daily dose",
+    "hard_seven_day_cap": false,
+    "wellness": "LOAD_ONLY_DIAGNOSTIC_IN_CURRENT_IMPLEMENTATION",
+    "second_session": "shared daily budget; reassess available actual data without fabricated hourly recovery",
+    "initial_base_or_legacy_addition_min_per_day": {
       "Z1": 40,
       "Z2": 20,
       "Z3": 8,
@@ -375,10 +382,9 @@
       "Z5": 2,
       "STR": 8
     },
-    "dynamic_shape": "1 + 4 * clamp((nominal_days - 2) / 5, 0, 1); frozen per daily dose",
-    "hard_seven_day_cap": false,
-    "wellness": "LOAD_ONLY_DIAGNOSTIC_IN_CURRENT_IMPLEMENTATION",
-    "second_session": "shared daily budget; reassess available actual data without fabricated hourly recovery"
+    "exhaustion": "sum(segment_minutes / Tmax(segment_intensity)); no within-session reconstitution",
+    "duration": "Q / mean_daily_Q * (0.8 + 0.6 * clamp(exhaustion - 0.5, 0, 0.5)) * duration_coefficient",
+    "amplitude": "100 * min(1, exhaustion); retain full Q and accumulated residual fatigue"
   },
   "periodization": {
     "methodical_accents": {
