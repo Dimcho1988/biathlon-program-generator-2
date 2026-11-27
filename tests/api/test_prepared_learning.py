@@ -154,7 +154,7 @@ def test_authorization_and_cold_http_response_do_not_touch_source(monkeypatch):
     compute.assert_not_called()
 
 
-def test_learning_preparation_gets_a_turn_even_with_a_busy_planning_queue():
+def test_shutdown_during_learning_preparation_does_not_accept_a_job():
     stopping = Event()
     calls = []
     def job():
@@ -167,4 +167,4 @@ def test_learning_preparation_gets_a_turn_even_with_a_busy_planning_queue():
         process_next_prepared_learning=warm_learning), stopping)
     worker.join(timeout=2)
     assert not worker.is_alive()
-    assert calls == ["job", "learning"]
+    assert calls == ["learning"]

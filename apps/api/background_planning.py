@@ -13,6 +13,7 @@ def start(repository, stopping):
 
     def run():
         next_automatic, next_dashboard, next_learning, next_view = 0., 0., 0., 0.
+        planning_worked = False
         while not stopping.is_set():
             warmer = getattr(repository, 'process_next_prepared_dashboard', None)
             if callable(warmer) and monotonic() >= next_dashboard:
@@ -25,19 +26,6 @@ def start(repository, stopping):
                     logger.warning('dashboard_tick_deferred error_type=%s', type(exc).__name__)
             if stopping.is_set():
                 break
-            try:
-                worked = processor()
-            except Exception as exc:
-                worked = False
-                logger.warning('planning_queue_deferred error_type=%s', type(exc).__name__)
-            if stopping.is_set():
-                break
-            if not worked and monotonic() >= next_automatic:
-                next_automatic = monotonic()+15.
-                try:
-                    repository.refresh_due_training_plans()
-                except Exception as exc:
-                    logger.warning('management_tick_deferred error_type=%s', type(exc).__name__)
             learner = getattr(repository, 'process_next_prepared_learning', None)
             if not stopping.is_set() and callable(learner) and monotonic() >= next_learning:
                 # Give read-model preparation a bounded turn even with a busy
@@ -47,16 +35,33 @@ def start(repository, stopping):
                     learner()
                 except Exception as exc:
                     logger.warning('learning_tick_deferred error_type=%s', type(exc).__name__)
+            view_worked = False
             viewer = getattr(repository, 'process_next_prepared_view', None)
-            if not stopping.is_set() and callable(viewer) and (not worked or monotonic() >= next_view):
-                # A busy generation queue must not starve the pages needed to
-                # read its results. One bounded view shares the same model lane.
+            if not stopping.is_set() and callable(viewer) and (not planning_worked or monotonic() >= next_view):
+                # Prepare one page before claiming more planning work. Use the
+                # previous planning turn to throttle busy queues; idle queues
+                # keep draining pages without a 15-second delay per page.
                 next_view = monotonic()+15.
                 try:
-                    worked = bool(viewer()) or worked
+                    view_worked = bool(viewer())
                 except Exception as exc:
                     logger.warning('prepared_view_tick_deferred error_type=%s', type(exc).__name__)
-            stopping.wait(0.1 if worked else 3.)
+            if stopping.is_set():
+                break
+            try:
+                planning_worked = bool(processor())
+            except Exception as exc:
+                planning_worked = False
+                logger.warning('planning_queue_deferred error_type=%s', type(exc).__name__)
+            if stopping.is_set():
+                break
+            if not planning_worked and monotonic() >= next_automatic:
+                next_automatic = monotonic()+15.
+                try:
+                    repository.refresh_due_training_plans()
+                except Exception as exc:
+                    logger.warning('management_tick_deferred error_type=%s', type(exc).__name__)
+            stopping.wait(0.1 if planning_worked or view_worked else 3.)
 
     # Non-daemon: SIGTERM stops new claims while a fenced in-flight draft drains.
     thread = Thread(target=run, name='planning-queue', daemon=False)
