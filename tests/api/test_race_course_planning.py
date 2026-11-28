@@ -43,12 +43,24 @@ def test_calendar_old_shape_and_optional_course_roundtrip():
         PlanningCalendarEvent.model_validate(event(event_type="CAMP"))
 
 
-def test_calendar_http_saves_and_reads_course_with_existing_envelope(monkeypatch):
+@pytest.mark.parametrize("generation_reads", [True, False])
+def test_calendar_http_saves_and_reads_course_with_existing_envelope(monkeypatch, generation_reads):
     saved = {}
     version = {"revision": 0}
+    analysis = {"active": None}
+
+    def read_active(alias):
+        assert alias == "athlete"
+        return analysis["active"]
+
+    def unexpected_read(alias):
+        pytest.fail("Calendar used the wrong analysis reader for its storage mode")
+
     repo = SimpleNamespace(athlete_settings=lambda _: AthleteModelSettings((100, 120, 140, 160, 180, 200), "Europe/Sofia"),
         athlete_planning_profile=lambda _: None, athlete_mesocycle_accent_preferences=lambda _: None,
-        athlete_planning_calendar=lambda alias: saved.get(alias), latest=lambda _: None,
+        athlete_planning_calendar=lambda alias: saved.get(alias), _generation_reads=generation_reads,
+        latest=unexpected_read if generation_reads else read_active,
+        active_analysis_metadata=read_active if generation_reads else unexpected_read,
         athlete_planning_calendar_snapshot=lambda alias: {"calendar": saved.get(alias), "revision": version["revision"]},
         _request=lambda method, path, **kwargs: [{"planning_calendar": saved["athlete"].to_payload() if "athlete" in saved else None,
                                                 "calendar_revision": version["revision"]}],
@@ -70,7 +82,10 @@ def test_calendar_http_saves_and_reads_course_with_existing_envelope(monkeypatch
     payload = {"schema_version": "planning-calendar-v1", "events": [event((date.today()+timedelta(days=10)).isoformat())]}
     response = client.put("/api/v2/athlete/planning-calendar", headers=headers, json=payload)
     assert response.status_code == 200, response.text
+    assert "TRAINING_SNAPSHOT" in response.json()["context"]["missing_inputs"]
+    analysis["active"] = {"revision": 1} if generation_reads else {}
     loaded = client.get("/api/v2/athlete/planning-calendar", headers=headers)
+    assert "TRAINING_SNAPSHOT" not in loaded.json()["context"]["missing_inputs"]
     assert loaded.json()["calendar"] == response.json()["calendar"] == payload
     assert loaded.json()["revision"] == 1
 

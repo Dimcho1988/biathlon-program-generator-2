@@ -348,14 +348,19 @@ def _planning_calendar_response(
     calendar: AthletePlanningCalendar | None,
     revision: int | None = None,
 ) -> PlanningCalendarResponse:
+    # Match latest()'s storage mode. Calendar readiness only checks for presence.
+    read_reference = (
+        repository.active_analysis_metadata
+        if getattr(repository, "_generation_reads", False)
+        else repository.latest
+    )
     context = planning_generation_context(
         calendar=calendar,
         profile=repository.athlete_planning_profile(athlete_alias),
         accent_preferences=repository.athlete_mesocycle_accent_preferences(
             athlete_alias
         ),
-        # Calendar readiness needs presence only, not a Recovery recomputation.
-        training_snapshot=repository.latest(athlete_alias),
+        training_snapshot=read_reference(athlete_alias),
         as_of=date.today(),
     )
     return PlanningCalendarResponse(
