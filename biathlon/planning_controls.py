@@ -197,9 +197,6 @@ def volume_basis(profile, evidence):
         if controls and profile.get("strength_enabled"):
             historical += by_sport.get("WeightTraining", 0.)
         basis = "ACTUAL_ALL_TRAINING_28_DAY_MEAN" if controls else "ACTUAL_SAME_SPORT_28_DAY_MEAN"
-    elif by_sport:
-        historical = sum(v for s,v in by_sport.items() if s != "WeightTraining" or profile.get("strength_enabled")) if controls else selected
-        basis = "LIMITED_OBSERVED_HISTORY"
     elif reported:
         historical = sum(reported)/len(reported)*60
         basis = "REPORTED_FOUR_WEEK_MEAN"
@@ -211,5 +208,5 @@ def volume_basis(profile, evidence):
     return {"historical_training_weekly_minutes": round(historical, 3),
             "historical_selected_weekly_minutes": round(selected, 3),
             "baseline_weekly_minutes": round(baseline, 3), "weekly_volume_source": basis,
-            "reported_history_only": not by_sport and bool(reported),
-            "missing_history": not by_sport and not reported}
+            "reported_history_only": basis == "REPORTED_FOUR_WEEK_MEAN",
+            "missing_history": basis == "MISSING"}

@@ -41,7 +41,22 @@ def test_large_break_uses_only_resumed_segment(missing, resumed, usable):
     policy = evidence['history_policy']
     assert policy['usable'] is usable and policy['reference_days'] == resumed
     assert policy['gaps'][0]['kind'] == ('MISSING_OR_MIXED_COVERAGE' if missing else 'CONFIRMED_BREAK')
-    assert planning_controls.volume_basis(profile(planning_controls=controls()), evidence)['baseline_weekly_minutes'] == 840
+    assert planning_controls.volume_basis(profile(planning_controls=controls()), evidence)['baseline_weekly_minutes'] == (840 if usable else 0)
+
+
+@pytest.mark.parametrize("days,reported,minutes,basis", [
+    (1, None, 0, "MISSING"),
+    (1, [4]*4, 240, "REPORTED_FOUR_WEEK_MEAN"),
+    (9, [0]*4, 0, "REPORTED_FOUR_WEEK_MEAN"),
+    (10, [4]*4, 840, "ACTUAL_ALL_TRAINING_28_DAY_MEAN"),
+])
+def test_weekly_baseline_precedence(days, reported, minutes, basis):
+    evidence = planning_controls.volume_history(history(days), TODAY, 0)
+    result = planning_controls.volume_basis(profile(planning_controls=controls(), recent_weekly_hours=reported), evidence)
+    assert result["weekly_volume_source"] == basis
+    assert result["baseline_weekly_minutes"] == minutes
+    assert result["missing_history"] == (basis == "MISSING")
+    assert result["reported_history_only"] == (basis == "REPORTED_FOUR_WEEK_MEAN")
 
 
 def test_missing_days_are_not_counted_as_rest_and_gap_threshold_is_configurable():
