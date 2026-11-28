@@ -79,3 +79,6 @@ end;
 $$;
 
 rollback;
+
+-- A first import with no records is a terminal sync with no readable generation.
+\ir empty_initial_sync.sql

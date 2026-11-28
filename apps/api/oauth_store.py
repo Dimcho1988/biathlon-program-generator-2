@@ -1324,6 +1324,14 @@ class SupabasePilotRepository(SnapshotRepository):
             raise PersistentStoreFailure("Analysis generation could not be staged")
         return dict(row)
 
+    def complete_empty_initial_sync(self, *, job_id: str, generation_id: str, lease_token: str) -> str:
+        row = self._rpc_row("complete_onflows_empty_initial_sync", {
+            "p_job_id": job_id, "p_generation_id": generation_id, "p_lease_token": lease_token,
+        })
+        if not row or row.get("outcome") not in {"NO_ACTIVITIES", "LEASE_LOST"}:
+            raise PersistentStoreFailure("Invalid empty initial sync response")
+        return row["outcome"]
+
     def activate_analysis_generation(
         self, *, job_id: str, generation_id: str, lease_token: str
     ) -> Mapping[str, Any]:

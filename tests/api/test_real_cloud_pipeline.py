@@ -190,6 +190,47 @@ def test_ingests_activity_and_wellness_then_atomically_publishes_aggregate_snaps
     assert "comments" not in rendered
 
 
+def test_first_empty_sync_finishes_without_analysis_then_first_workout_activates():
+    from types import SimpleNamespace
+    from apps.api.sync_service import public_sync_state
+    from apps.api.sync_worker import SyncPipelines, process_claimed_job
+
+    class Diary(Client):
+        empty = True
+        def get_activities_result(self, oldest, newest):
+            return IntervalsResponse(200, []) if self.empty else super().get_activities_result(oldest, newest)
+
+    diary = Diary()
+    repo = InMemorySnapshotRepository()
+    repo._request = lambda *args, **kwargs: []  # No saved model entries for this athlete.
+    repo._json = lambda value: value
+    repo.connection = lambda alias: SimpleNamespace(status="CONNECTED", provider_athlete_id="test-id", access_token="test-token")
+    repo.athlete_settings = lambda alias: AthleteModelSettings((100,126,146,163,178,196), "Europe/Sofia", 196)
+    def full(storage, **kwargs):
+        return refresh(storage, environ=ENV, client=diary, **kwargs)
+    pipelines = SyncPipelines(full=full, wellness=None, recovery=None)
+    def run(key):
+        repo.enqueue_sync_job(athlete_alias="pilot", job_kind="FULL_SYNC", idempotency_key=key*64,
+                              request_payload={"as_of":"2026-08-15"})
+        claimed = repo.claim_sync_job(worker_id="test", lease_seconds=300)
+        assert repo.complete_empty_initial_sync(job_id=claimed["job_id"], generation_id=claimed["generation_id"],
+                                               lease_token="expired") == "LEASE_LOST"
+        return process_claimed_job(repo, claimed, pipelines=pipelines,
+            clock=lambda: datetime(2026, 8, 15, 12, tzinfo=timezone.utc)).outcome
+    for key in ("a", "b"):
+        assert run(key) == "NO_ACTIVITIES"
+        state = public_sync_state(repo.sync_state("pilot"))
+        assert (state.state, state.stage, state.failure_code) == ("SUCCEEDED", "NO_ACTIVITIES", None)
+        assert state.active_revision == 0 and repo.latest("pilot") is None
+    diary.empty = False
+    assert run("c") == "ACTIVATED"
+    active = repo.latest("pilot")
+    assert len(active["load_history"]["activities"]) == 1
+    diary.empty = True
+    assert run("d") == "FAILED"
+    assert repo.latest("pilot") == active
+
+
 def test_empty_activity_stream_excludes_shadow_without_blocking_canonical_refresh():
     repo = InMemorySnapshotRepository()
 

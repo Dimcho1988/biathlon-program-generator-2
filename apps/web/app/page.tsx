@@ -3,6 +3,8 @@ import type { CompletedWork } from "../lib/completed-work";
 import type { LoadHistory } from "../lib/load-history";
 import type { RecoveryHistory } from "../lib/recovery-history";
 import type { VolumeHistory } from "../lib/volume-history";
+import { SyncActionForm } from "../components/sync-action-form";
+import Link from "next/link";
 import { Dashboard } from "../components/dashboard";
 import { ErrorState } from "../components/error-state";
 import { multiProfileMode } from "../lib/athlete-session";
@@ -201,6 +203,12 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ v
   }
   if (athleteSettingsRequired)
     return <AthleteSettingsForm notice={settingsNotice} automaticPercentages={automaticPercentages} />;
+
+  if (!result.ok && syncState?.state === "SUCCEEDED" && syncState.stage === "NO_ACTIVITIES" && syncState.active_generation_id === null)
+    return <main className="state-page"><h1>Профилът е свързан</h1>
+      <p>Все още няма записани тренировки. След първата тренировка в Intervals обновете данните.</p>
+      <div className="integration-actions"><SyncActionForm /><Link className="text-action" href="/planning">Профил за планиране</Link></div>
+    </main>;
 
   if (!result.ok && syncState && syncInProgress(syncState) && syncState.active_generation_id === null)
     return <SyncPendingState state={syncState} />;

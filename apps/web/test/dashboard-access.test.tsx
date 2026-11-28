@@ -42,3 +42,15 @@ it("requires an accessible selected athlete before any aggregate read", async ()
   const html = renderToStaticMarkup(await Page({ searchParams: Promise.resolve({}) }));
   expect(html).toContain("Няма избран достъпен профил"); for (const read of reads) expect(read).not.toHaveBeenCalled();
 });
+
+
+it("shows the connected empty diary after a successful first sync", async () => {
+  vi.mocked(currentAuthorizedAthlete).mockResolvedValueOnce({ ...access, canViewRecovery: true });
+  vi.mocked(api.getDashboardView).mockRejectedValueOnce(new Error("No active analysis"));
+  vi.mocked(api.getAthleteSettings).mockResolvedValueOnce({ configured: true } as never);
+  vi.mocked(api.getSyncState).mockResolvedValueOnce({ scope: "FULL", state: "SUCCEEDED", stage: "NO_ACTIVITIES", active_generation_id: null } as never);
+  const html = renderToStaticMarkup(await Page({ searchParams: Promise.resolve({}) }));
+  expect(html).toContain("Все още няма записани тренировки");
+  expect(html).toContain("Обнови данните");
+  expect(html).not.toContain('role="alert"');
+});

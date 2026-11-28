@@ -91,7 +91,7 @@ class ProviderFailure(RuntimeError):
 
 @dataclass(frozen=True)
 class RefreshResult:
-    snapshot: TrainingStatusResponse
+    snapshot: TrainingStatusResponse | None
     processed_activities: int
     wellness_coverage: float
     wellness_records_received: int
@@ -1264,6 +1264,13 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         # ProviderReplay serves this same list to load_real_history without a
         # second download. Expected counts distinguish rest from failed detail.
         listed = provider.get_activities_result(start.isoformat(), end.isoformat()).payload
+        if listed == [] and previous is None:
+            # An enumerated empty history can finish before any physiological
+            # analysis exists. No daily loads or readiness are known yet.
+            return RefreshResult(snapshot=None, processed_activities=0,
+                wellness_coverage=float(wellness["coverage"]),
+                wellness_records_received=int(wellness_diagnostics["records_received"]),
+                wellness_days_stored=0)
         expected_refresh_dates = expected_activity_dates(listed, start, end)
         from intervals_inspector.real_data_source import _activity_duration_seconds, is_strength_activity
         from .activity_shadow_pipeline import (

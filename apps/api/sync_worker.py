@@ -79,6 +79,8 @@ class SyncRepository(Protocol):
         inherit_activities: bool = False,
     ) -> Mapping[str, Any]: ...
 
+    def complete_empty_initial_sync(self, *, job_id: str, generation_id: str, lease_token: str) -> str: ...
+
     def activate_analysis_generation(
         self, *, job_id: str, generation_id: str, lease_token: str
     ) -> Mapping[str, Any]: ...
@@ -498,7 +500,7 @@ def _execute_pipeline(
     *,
     pipelines: SyncPipelines,
     now: datetime,
-) -> tuple[Mapping[str, Any], list[Mapping[str, Any]], bool]:
+) -> tuple[Mapping[str, Any] | None, list[Mapping[str, Any]], bool]:
     connection = repository.connection(job.athlete_alias)
     if connection is None or _field(connection, "status") != "CONNECTED":
         raise _WorkerFailure("PROFILE_NOT_CONNECTED", retryable=False)
@@ -551,7 +553,8 @@ def _execute_pipeline(
                 return captured.snapshot, captured.activities, False
         if not isinstance(access_token, str) or not access_token:
             raise _WorkerFailure("PROFILE_CONNECTION_INVALID", retryable=False)
-        pipelines.full(
+        from .real_service import RefreshResult
+        result = pipelines.full(
             captured,
             access_token=access_token,
             provider_athlete_id=provider_athlete_id,
@@ -560,6 +563,10 @@ def _execute_pipeline(
             period_end=period_end,
             now=now,
         )
+        if isinstance(result, RefreshResult) and result.snapshot is None:
+            if job.base_generation_id is not None or result.processed_activities != 0:
+                raise SyncContractError("Empty initial sync has inconsistent inputs")
+            return None, [], False
         if not captured.catalog_captured:
             raise SyncContractError("Full sync did not produce an activity catalog")
         captured.report_sync_progress("PUBLISHING")
@@ -795,6 +802,12 @@ def process_claimed_job(
                 outcome="LEASE_LOST",
                 generation_id=job.generation_id,
             )
+        if snapshot is None:
+            outcome = repository.complete_empty_initial_sync(job_id=job.job_id,
+                generation_id=job.generation_id, lease_token=job.lease_token)
+            if outcome not in {"NO_ACTIVITIES", "LEASE_LOST"}:
+                raise SyncContractError("Invalid empty sync outcome")
+            return JobProcessResult(job_id=job.job_id, outcome=outcome)
         period_start, period_end, analysis_as_of = _generation_window(snapshot)
         provenance = _provenance(job, snapshot, activities)
         snapshot_hash = _canonical_hash(snapshot)

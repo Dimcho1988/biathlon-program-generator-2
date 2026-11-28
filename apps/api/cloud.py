@@ -926,6 +926,8 @@ class SnapshotRepository(Protocol):
         activities: list[Mapping[str, Any]],
         inherit_activities: bool = False,
     ) -> Mapping[str, Any]: ...
+    def complete_empty_initial_sync(self, *, job_id: str, generation_id: str, lease_token: str) -> str: ...
+
     def activate_analysis_generation(
         self, *, job_id: str, generation_id: str, lease_token: str
     ) -> Mapping[str, Any]: ...
@@ -1789,6 +1791,23 @@ class InMemorySnapshotRepository:
             job["progress_percent"] = 95
             job["updated_at"] = ready_at
             return {"outcome": "READY", "activity_count": len(staged_by_ref)}
+
+    def complete_empty_initial_sync(self, *, job_id: str, generation_id: str, lease_token: str) -> str:
+        with self._lock:
+            job = self._sync_jobs.get(job_id)
+            generation = self._analysis_generations.get(generation_id)
+            if (not self._lease_valid(job, generation_id=generation_id, lease_token=lease_token)
+                    or job["job_kind"] != "FULL_SYNC" or not generation
+                    or generation["job_id"] != job_id or generation["status"] != "BUILDING"
+                    or generation["base_revision"] != 0 or generation["base_generation_id"] is not None
+                    or self._state(job["athlete_alias"])["active_revision"] != 0):
+                return "LEASE_LOST"
+            now = datetime.now(timezone.utc)
+            generation.update(status="SUPERSEDED", superseded_at=now)
+            job.update(status="SUCCEEDED", lease_token=None, lease_owner=None, lease_expires_at=None,
+                       current_generation_id=None, completed_at=now, updated_at=now, error_code=None,
+                       progress_stage="NO_ACTIVITIES", progress_percent=100)
+            return "NO_ACTIVITIES"
 
     def activate_analysis_generation(
         self, *, job_id: str, generation_id: str, lease_token: str

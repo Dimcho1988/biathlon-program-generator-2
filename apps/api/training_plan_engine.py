@@ -40,7 +40,7 @@ from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 from . import plan_speed_comparison
 
-VERSION = "training-management-v82-automatic-strength-start"
+VERSION = "training-management-v83-initial-volume-basis"
 PARAMETER_VERSION = "management-parameters-v67"
 MIN_AEROBIC_DOSE_FRACTION = 0.  # Native recipes own their structural minimum; no generic Tmax floor.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
