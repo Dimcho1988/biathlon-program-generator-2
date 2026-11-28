@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, Response
 from fastapi.encoders import jsonable_encoder
+from starlette.responses import JSONResponse
 from pydantic import BaseModel
 
 from . import prepared_view_storage
@@ -82,7 +83,9 @@ def read(repository, alias, kind, parameters=None):
         payload = state.get("payload")
         if not isinstance(payload, dict):
             raise ValueError("Invalid prepared view payload")
-        payload = prepared_view_storage.unpack(payload)
+        from .management_projection import public_management
+        payload = prepared_view_storage.unpack(payload,
+            projection=public_management if kind in SAVED_MANAGEMENT_VIEWS else None)
         error = payload.get("prepared_error")
         if isinstance(error, dict):
             # An older failure is not a usable saved program. Keep the worker
@@ -94,11 +97,9 @@ def read(repository, alias, kind, parameters=None):
                 raise ValueError("Invalid prepared view error")
             raise HTTPException(status, error.get("detail", "Данните изискват преглед."))
         if kind in SAVED_MANAGEMENT_VIEWS:
-            from .management_projection import public_management
             # Apply today's presentation policy even to ready cached pages. Their
             # immutable scientific evidence stays in storage; obsolete workflow
             # hints must not resurrect approval controls during a refresh.
-            payload = public_management(payload)
             if kind == "management-active":
                 payload["capabilities"] = {**(payload.get("capabilities") or {}), "automatic_publication": True}
             elif isinstance(payload.get("active"), dict):
@@ -176,8 +177,13 @@ def endpoint(kind):
                 if value == default:
                     continue
                 parameters[name] = jsonable_encoder(value)
-            return read(repository, alias, kind, parameters)
+            payload = read(repository, alias, kind, parameters)
+            # Persisted page values are JSON, including the live sync overlay.
+            # Render once in this worker thread; FastAPI must not recursively
+            # copy the large dictionary a second time on the event loop.
+            return JSONResponse(payload) if kind in SAVED_MANAGEMENT_VIEWS else payload
 
+        prepared._onflows_prepared_kind = kind
         return prepared
     return decorate
 

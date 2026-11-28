@@ -25,9 +25,10 @@ def pack(kind, payload):
     return {TAG: CODEC, "raw_bytes": len(raw), "data": data}
 
 
-def unpack(payload):
+def unpack(payload, *, projection=None):
     if TAG not in payload:
-        return deepcopy(payload)
+        # Public projection already constructs an isolated recursive copy.
+        return projection(payload) if projection is not None else deepcopy(payload)
     size, data = payload.get("raw_bytes"), payload.get("data")
     if (payload[TAG] != CODEC or type(size) is not int or not 0 < size <= MAX_BYTES
             or not isinstance(data, str) or len(data) > MAX_BYTES):
@@ -43,4 +44,4 @@ def unpack(payload):
     value = json.loads(raw)
     if not isinstance(value, dict):
         raise ValueError("Invalid prepared page object")
-    return value
+    return projection(value) if projection is not None else value
