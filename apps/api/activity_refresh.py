@@ -1,4 +1,4 @@
-"""Small, generation-pinned inputs for appending a chronological recording."""
+"""Small, generation-pinned inputs for appending chronological recordings."""
 import base64
 from datetime import datetime
 from hashlib import sha256
@@ -84,11 +84,11 @@ class ActivityRefresh:
         if not prior.keys() <= inputs.keys():
             return
         added = inputs.keys() - prior.keys()
-        if len(added) > 1:
-            return
         if added:
-            day, utc = inputs[next(iter(added))]
-            if any(inputs[k][0] > day or inputs[k][1] >= utc for k in prior):
+            # Local dates group daily loads; UTC orders the recordings across time zones.
+            first_new_day = min(inputs[key][0] for key in added)
+            first_new_start = min(inputs[key][1] for key in added)
+            if any(inputs[key][0] > first_new_day or inputs[key][1] >= first_new_start for key in prior):
                 return
         for key, row in prior.items():
             saved = unpack(row.get("refresh_checkpoint"))
