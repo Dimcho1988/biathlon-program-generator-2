@@ -56,7 +56,8 @@ def cloud_fixture(monkeypatch, repo):
 
 
 @pytest.mark.parametrize("offset", [0, 1])
-def test_append_matches_full_refresh_without_old_recordings(monkeypatch, offset):
+@pytest.mark.parametrize("hours", [(16,), (18, 16)])
+def test_append_matches_full_refresh_without_old_recordings(monkeypatch, offset, hours):
     client = Recordings()
     for days in (40, 10, 5, 2, 1, 0):
         client.add(END - timedelta(days=days))
@@ -71,19 +72,36 @@ def test_append_matches_full_refresh_without_old_recordings(monkeypatch, offset)
         return perf_counter() - start
     run(END)
     day = END + timedelta(days=offset)
-    new = client.add(day, 16)
+    new = [client.add(day, hour) for hour in hours]
     append_seconds = run(day)
-    assert client.details == client.streams == [new]
+    assert sorted(client.details) == sorted(client.streams) == sorted(new)
     expected = repo.latest("pilot")
     kept = {row["activity_ref"]: (row["latest_canonical_run_key"], row.get("latest_shadow_run_key"))
             for row in repo.activity_calendar("pilot", day - timedelta(days=40), day)}
     monkeypatch.setattr(activity_refresh, "calculation_version", lambda _: None)
     full_seconds = run(day)
-    assert len(client.details) == 8 - offset
+    assert len(client.details) == 7 - offset + len(new)
     assert repo.latest("pilot") == expected
     assert kept == {row["activity_ref"]: (row["latest_canonical_run_key"], row.get("latest_shadow_run_key"))
                     for row in repo.activity_calendar("pilot", day - timedelta(days=40), day)}
-    print(f"old={len(kept)-1} append={append_seconds:.3f}s full={full_seconds:.3f}s")
+    print(f"old={len(kept) - len(new)} append={append_seconds:.3f}s full={full_seconds:.3f}s")
+
+
+@pytest.mark.parametrize(("local_days_ago", "utc_hour"), [(1, 11), (0, 8), (0, 7)])
+def test_batch_with_non_append_record_replays_history(monkeypatch, local_days_ago, utc_hour):
+    client = Recordings()
+    client.add(END - timedelta(days=2))
+    client.add(END, 8)
+    repo = InMemorySnapshotRepository()
+    settings = cloud_fixture(monkeypatch, repo)
+    refresh(repo, environ=ENV, client=client, period_end=END, now=NOW, athlete_settings=settings)
+    client.add(END, 18)
+    other = client.add(END - timedelta(days=local_days_ago), 23 if local_days_ago else 9)
+    client.rows[other]["start_date"] = f"{END}T{utc_hour:02}:00:00Z"
+    client.details.clear()
+    client.streams.clear()
+    refresh(repo, environ=ENV, client=client, period_end=END, now=NOW, athlete_settings=settings)
+    assert sorted(client.details) == sorted(client.streams) == sorted(client.rows)
 
 
 def test_retry_and_reanalysis_only_download_changed_measurements(monkeypatch):
